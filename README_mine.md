@@ -14,6 +14,11 @@
 * GPU memory: 4.5+3.8+3.8+3.8+3.8+3.8=23.5G for 6 GPUs
 * train_time: 1.2\*2392\*150=430560s=120h for 6 GPUs
 
+retrain base model
+* batch_size: 24
+* GPU memory: 10*6=60G for 6 GPUs
+* train_time: 8min\*150=1200min=20h
+
 ## Problem Statement
 The objective of the challenge is to design a machine learning solution that takes a sequence of 5 samples camera, LiDAR, radar sensor data and 2 samples user GPS data, to predict the optimal beam index. 
 

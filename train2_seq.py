@@ -33,7 +33,7 @@ parser.add_argument('--id', type=str, default=time_id, help='Unique experiment i
 parser.add_argument('--device', type=str, default='cuda', help='Device to use')
 parser.add_argument('--epochs', type=int, default=150, help='Number of train epochs.')
 parser.add_argument('--lr', type=float, default=5e-4, help='Learning rate.')
-parser.add_argument('--batch_size', type=int, default=6, help='Batch size')	# default=24
+parser.add_argument('--batch_size', type=int, default=2, help='Batch size')	# default=24
 parser.add_argument('--logdir', type=str, default='log', help='Directory to log data to.')	# /ibex/scratch/tiany0c/log
 parser.add_argument('--add_velocity', type = int, default=1, help='concatenate velocity map with angle map')
 parser.add_argument('--add_mask', type=int, default=0, help='add mask to the camera data')

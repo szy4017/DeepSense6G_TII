@@ -334,28 +334,28 @@ class Encoder(nn.Module):
         
         self.config.n_views = len(image_list) // self.config.seq_len
 
-        image_tensor = torch.stack(image_list, dim=1).view(bz * self.config.n_views * self.config.seq_len, img_channel, h, w)
-        lidar_tensor = torch.stack(lidar_list, dim=1).view(bz * self.config.seq_len, lidar_channel, h, w)
-        radar_tensor = torch.stack(radar_list, dim=1).view(bz * self.config.seq_len, radar_channel, h, w)
+        image_tensor = torch.stack(image_list, dim=1).view(bz * self.config.n_views * self.config.seq_len, img_channel, h, w)   # (bz*seq_len, img_c, h, w)
+        lidar_tensor = torch.stack(lidar_list, dim=1).view(bz * self.config.seq_len, lidar_channel, h, w)   # (bz*seq_len, lidar_c, h, w)
+        radar_tensor = torch.stack(radar_list, dim=1).view(bz * self.config.seq_len, radar_channel, h, w)   # (bz*seq_len, radar_c, h, w)
 
         image_features = self.image_encoder.features.conv1(image_tensor)
         image_features = self.image_encoder.features.bn1(image_features)
         image_features = self.image_encoder.features.relu(image_features)
-        image_features = self.image_encoder.features.maxpool(image_features)
+        image_features = self.image_encoder.features.maxpool(image_features)    # (bz*seq_len, 64, 64, 64)
         
         lidar_features = self.lidar_encoder._model.conv1(lidar_tensor)
         lidar_features = self.lidar_encoder._model.bn1(lidar_features)
         lidar_features = self.lidar_encoder._model.relu(lidar_features)
-        lidar_features = self.lidar_encoder._model.maxpool(lidar_features)
+        lidar_features = self.lidar_encoder._model.maxpool(lidar_features)      # (bz*seq_len, 64, 64, 64)
         
         radar_features = self.radar_encoder._model.conv1(radar_tensor)
         radar_features = self.radar_encoder._model.bn1(radar_features)
         radar_features = self.radar_encoder._model.relu(radar_features)
-        radar_features = self.radar_encoder._model.maxpool(radar_features)
+        radar_features = self.radar_encoder._model.maxpool(radar_features)      # (bz*seq_len, 64, 64, 64)
 
-        image_features = self.image_encoder.features.layer1(image_features)
-        lidar_features = self.lidar_encoder._model.layer1(lidar_features)
-        radar_features = self.radar_encoder._model.layer1(radar_features)
+        image_features = self.image_encoder.features.layer1(image_features) # (bz*seq_len, 64, 64, 64)
+        lidar_features = self.lidar_encoder._model.layer1(lidar_features)   # (bz*seq_len, 64, 64, 64)
+        radar_features = self.radar_encoder._model.layer1(radar_features)   # (bz*seq_len, 64, 64, 64)
 
         # fusion at (B, 64, 64, 64)
         image_embd_layer1 = self.avgpool(image_features)
@@ -415,10 +415,10 @@ class Encoder(nn.Module):
 
 
         # fusion at (B, 512, 8, 8)
-        image_embd_layer4 = self.avgpool(image_features)
-        lidar_embd_layer4 = self.avgpool(lidar_features)
-        radar_embd_layer4 = self.avgpool(radar_features)
-        gps_embd_layer4 = self.vel_emb4(gps_features_layer3)
+        image_embd_layer4 = self.avgpool(image_features)    # (bz*seq_len, 512, 8, 8)
+        lidar_embd_layer4 = self.avgpool(lidar_features)    # (bz*seq_len, 512, 8, 8)
+        radar_embd_layer4 = self.avgpool(radar_features)    # (bz*seq_len, 512, 8, 8)
+        gps_embd_layer4 = self.vel_emb4(gps_features_layer3)    # (bz, 2, 512)
 
         image_features_layer4, lidar_features_layer4, radar_features_layer4, gps_features_layer4 = self.transformer4(image_embd_layer4, lidar_embd_layer4, radar_embd_layer4, gps_embd_layer4)
         image_features = image_features + image_features_layer4
@@ -427,19 +427,19 @@ class Encoder(nn.Module):
 
         image_features = self.image_encoder.features.avgpool(image_features)
         image_features = torch.flatten(image_features, 1)
-        image_features = image_features.view(bz, self.config.n_views * self.config.seq_len, -1)
+        image_features = image_features.view(bz, self.config.n_views * self.config.seq_len, -1) # (bz, seq_len, 512)
         lidar_features = self.lidar_encoder._model.avgpool(lidar_features)
         lidar_features = torch.flatten(lidar_features, 1)
         lidar_features = lidar_features.view(bz, self.config.seq_len, -1)
-        radar_features = self.radar_encoder._model.avgpool(radar_features)
+        radar_features = self.radar_encoder._model.avgpool(radar_features)  # (bz, seq_len, 512)
         radar_features = torch.flatten(radar_features, 1)
-        radar_features = radar_features.view(bz, self.config.seq_len, -1)
-        gps_features = gps_features_layer4
+        radar_features = radar_features.view(bz, self.config.seq_len, -1)   # (bz, seq_len, 512)
+        gps_features = gps_features_layer4  # (bz, 2, 512)
 
-        fused_features = torch.cat([image_features, lidar_features, radar_features, gps_features], dim=1)
+        fused_features = torch.cat([image_features, lidar_features, radar_features, gps_features], dim=1)   # (1, 17, 512)
         # fused_features = torch.cat([image_features, lidar_features, radar_features], dim=1)
 
-        fused_features = torch.sum(fused_features, dim=1)
+        fused_features = torch.sum(fused_features, dim=1)   # (1, 17, 512)
 
         return fused_features
 
