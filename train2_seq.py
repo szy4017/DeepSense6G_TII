@@ -5,6 +5,7 @@ import csv
 
 from tqdm import tqdm
 import pandas as pd
+from datetime import datetime
 
 import numpy as np
 import torch
@@ -27,7 +28,8 @@ kw='final_'# keyword for the pretrained model in finetune
 torch.cuda.empty_cache()
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--id', type=str, default='test', help='Unique experiment identifier.')
+time_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+parser.add_argument('--id', type=str, default=time_id, help='Unique experiment identifier.')
 parser.add_argument('--device', type=str, default='cuda', help='Device to use')
 parser.add_argument('--epochs', type=int, default=150, help='Number of train epochs.')
 parser.add_argument('--lr', type=float, default=5e-4, help='Learning rate.')
@@ -441,12 +443,12 @@ train_root_csv='ml_challenge_dev_multi_modal.csv'
 
 if not args.Test:
 	for keywords in ['scenario32','scenario33','scenario34']:
-		createDataset(trainval_root+train_root_csv, trainval_root+keywords,keywords)
+		# createDataset(trainval_root+train_root_csv, trainval_root+keywords,keywords) # already exist
 		print(trainval_root+keywords)
 	val_root = data_root + '/Adaptation_dataset_multi_modal/'
 	val_root_csv='ml_challenge_data_adaptation_multi_modal.csv'
 	for keywords in ['scenario31','scenario32','scenario33']:
-		createDataset(val_root+val_root_csv, val_root+keywords,keywords)
+		# createDataset(val_root+val_root_csv, val_root+keywords,keywords) # already exist
 		print(val_root + keywords)
 # Data
 if args.finetune and not args.Test:
@@ -557,7 +559,8 @@ elif os.path.isfile(os.path.join(args.logdir, 'recent.log')):
 			model.load_state_dict(torch.load(os.path.join(args.logdir, kw+'model.pth')))
 	else:
 		print('======loading best_model')
-		model.load_state_dict(torch.load(os.path.join(args.logdir, 'best_model.pth')))
+		print('======No checkpoint for best_model')
+		# model.load_state_dict(torch.load(os.path.join(args.logdir, 'best_model.pth')))
 
 
 ema = EMA(model, 0.999)
