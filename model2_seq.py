@@ -6,7 +6,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from torchvision import models
-
+from mamba_ssm import Mamba
 
 
 class ImageCNN(nn.Module):
@@ -444,6 +444,216 @@ class Encoder(nn.Module):
         return fused_features
 
 
+class EncoderWithMamba(nn.Module):
+    """
+    Multi-scale Fusion Transformer for image + LiDAR feature fusion
+    Add Mamba block for time sequence fusion
+    """
+
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.avgpool = nn.AdaptiveAvgPool2d((self.config.vert_anchors, self.config.horz_anchors))
+        self.image_encoder = ImageCNN(512, normalize=True)
+        self.lidar_encoder = LidarEncoder(num_classes=512, in_channels=1)
+        if config.add_velocity:
+            self.radar_encoder = LidarEncoder(num_classes=512, in_channels=2)
+        else:
+            self.radar_encoder = LidarEncoder(num_classes=512, in_channels=1)
+
+        self.vel_emb1 = nn.Linear(2, 64)
+        self.vel_emb2 = nn.Linear(64, 128)
+        self.vel_emb3 = nn.Linear(128, 256)
+        self.vel_emb4 = nn.Linear(256, 512)
+
+        self.transformer1 = GPT(n_embd=64,
+                                n_head=config.n_head,
+                                block_exp=config.block_exp,
+                                n_layer=config.n_layer,
+                                vert_anchors=config.vert_anchors,
+                                horz_anchors=config.horz_anchors,
+                                seq_len=config.seq_len,
+                                embd_pdrop=config.embd_pdrop,
+                                attn_pdrop=config.attn_pdrop,
+                                resid_pdrop=config.resid_pdrop,
+                                config=config)
+        self.transformer2 = GPT(n_embd=128,
+                                n_head=config.n_head,
+                                block_exp=config.block_exp,
+                                n_layer=config.n_layer,
+                                vert_anchors=config.vert_anchors,
+                                horz_anchors=config.horz_anchors,
+                                seq_len=config.seq_len,
+                                embd_pdrop=config.embd_pdrop,
+                                attn_pdrop=config.attn_pdrop,
+                                resid_pdrop=config.resid_pdrop,
+                                config=config)
+        self.transformer3 = GPT(n_embd=256,
+                                n_head=config.n_head,
+                                block_exp=config.block_exp,
+                                n_layer=config.n_layer,
+                                vert_anchors=config.vert_anchors,
+                                horz_anchors=config.horz_anchors,
+                                seq_len=config.seq_len,
+                                embd_pdrop=config.embd_pdrop,
+                                attn_pdrop=config.attn_pdrop,
+                                resid_pdrop=config.resid_pdrop,
+                                config=config)
+        self.transformer4 = GPT(n_embd=512,
+                                n_head=config.n_head,
+                                block_exp=config.block_exp,
+                                n_layer=config.n_layer,
+                                vert_anchors=config.vert_anchors,
+                                horz_anchors=config.horz_anchors,
+                                seq_len=config.seq_len,
+                                embd_pdrop=config.embd_pdrop,
+                                attn_pdrop=config.attn_pdrop,
+                                resid_pdrop=config.resid_pdrop,
+                                config=config)
+        self.time_mamba = Mamba(d_model=512,
+                                d_state=16,
+                                d_conv=4,
+                                expand=2)
+
+    def forward(self, image_list, lidar_list, radar_list, gps):
+        '''
+        Image + LiDAR feature fusion using transformers
+        Args:
+            image_list (list): list of input images
+            lidar_list (list): list of input LiDAR BEV
+            gps (tensor): input gps
+        '''
+        if self.image_encoder.normalize:
+            image_list = [normalize_imagenet(image_input) for image_input in image_list]
+
+        bz, _, h, w = lidar_list[0].shape
+        img_channel = image_list[0].shape[1]
+        lidar_channel = lidar_list[0].shape[1]
+        radar_channel = radar_list[0].shape[1]
+
+        self.config.n_views = len(image_list) // self.config.seq_len
+
+        image_tensor = torch.stack(image_list, dim=1).view(bz * self.config.n_views * self.config.seq_len, img_channel,
+                                                           h, w)  # (bz*seq_len, img_c, h, w)
+        lidar_tensor = torch.stack(lidar_list, dim=1).view(bz * self.config.seq_len, lidar_channel,
+                                                           h, w)  # (bz*seq_len, lidar_c, h, w)
+        radar_tensor = torch.stack(radar_list, dim=1).view(bz * self.config.seq_len, radar_channel,
+                                                           h, w)  # (bz*seq_len, radar_c, h, w)
+
+        image_features = self.image_encoder.features.conv1(image_tensor)
+        image_features = self.image_encoder.features.bn1(image_features)
+        image_features = self.image_encoder.features.relu(image_features)
+        image_features = self.image_encoder.features.maxpool(image_features)  # (bz*seq_len, 64, 64, 64)
+
+        lidar_features = self.lidar_encoder._model.conv1(lidar_tensor)
+        lidar_features = self.lidar_encoder._model.bn1(lidar_features)
+        lidar_features = self.lidar_encoder._model.relu(lidar_features)
+        lidar_features = self.lidar_encoder._model.maxpool(lidar_features)  # (bz*seq_len, 64, 64, 64)
+
+        radar_features = self.radar_encoder._model.conv1(radar_tensor)
+        radar_features = self.radar_encoder._model.bn1(radar_features)
+        radar_features = self.radar_encoder._model.relu(radar_features)
+        radar_features = self.radar_encoder._model.maxpool(radar_features)  # (bz*seq_len, 64, 64, 64)
+
+        image_features = self.image_encoder.features.layer1(image_features)  # (bz*seq_len, 64, 64, 64)
+        lidar_features = self.lidar_encoder._model.layer1(lidar_features)  # (bz*seq_len, 64, 64, 64)
+        radar_features = self.radar_encoder._model.layer1(radar_features)  # (bz*seq_len, 64, 64, 64)
+
+        # fusion at (B, 64, 64, 64)
+        image_embd_layer1 = self.avgpool(image_features)
+        lidar_embd_layer1 = self.avgpool(lidar_features)
+        radar_embd_layer1 = self.avgpool(radar_features)
+        gps_embd_layer1 = self.vel_emb1(gps)
+
+        image_features_layer1, lidar_features_layer1, radar_features_layer1, gps_features_layer1 = self.transformer1(
+            image_embd_layer1, lidar_embd_layer1, radar_embd_layer1, gps_embd_layer1)
+        image_features_layer1 = F.interpolate(image_features_layer1, scale_factor=8, mode='bilinear')
+        lidar_features_layer1 = F.interpolate(lidar_features_layer1, scale_factor=8, mode='bilinear')
+        radar_features_layer1 = F.interpolate(radar_features_layer1, scale_factor=8, mode='bilinear')
+        image_features = image_features + image_features_layer1
+        lidar_features = lidar_features + lidar_features_layer1
+        radar_features = radar_features + radar_features_layer1
+
+        image_features = self.image_encoder.features.layer2(image_features)
+        lidar_features = self.lidar_encoder._model.layer2(lidar_features)
+        radar_features = self.radar_encoder._model.layer2(radar_features)
+
+        # fusion at (B, 128, 32, 32)
+        image_embd_layer2 = self.avgpool(image_features)
+        lidar_embd_layer2 = self.avgpool(lidar_features)
+        radar_embd_layer2 = self.avgpool(radar_features)
+        gps_embd_layer2 = self.vel_emb2(gps_features_layer1)
+
+        image_features_layer2, lidar_features_layer2, radar_features_layer2, gps_features_layer2 = self.transformer2(
+            image_embd_layer2, lidar_embd_layer2, radar_embd_layer2, gps_embd_layer2)
+        image_features_layer2 = F.interpolate(image_features_layer2, scale_factor=4, mode='bilinear')
+        lidar_features_layer2 = F.interpolate(lidar_features_layer2, scale_factor=4, mode='bilinear')
+        radar_features_layer2 = F.interpolate(radar_features_layer2, scale_factor=4, mode='bilinear')
+        image_features = image_features + image_features_layer2
+        lidar_features = lidar_features + lidar_features_layer2
+        radar_features = radar_features + radar_features_layer2
+
+        image_features = self.image_encoder.features.layer3(image_features)
+        lidar_features = self.lidar_encoder._model.layer3(lidar_features)
+        radar_features = self.radar_encoder._model.layer3(radar_features)
+
+        # fusion at (B, 256, 16, 16)
+        image_embd_layer3 = self.avgpool(image_features)
+        lidar_embd_layer3 = self.avgpool(lidar_features)
+        radar_embd_layer3 = self.avgpool(radar_features)
+        gps_embd_layer3 = self.vel_emb3(gps_features_layer2)
+
+        image_features_layer3, lidar_features_layer3, radar_features_layer3, gps_features_layer3 = self.transformer3(
+            image_embd_layer3, lidar_embd_layer3, radar_embd_layer3, gps_embd_layer3)
+
+        image_features_layer3 = F.interpolate(image_features_layer3, scale_factor=2, mode='bilinear')
+        lidar_features_layer3 = F.interpolate(lidar_features_layer3, scale_factor=2, mode='bilinear')
+        radar_features_layer3 = F.interpolate(radar_features_layer3, scale_factor=2, mode='bilinear')
+        image_features = image_features + image_features_layer3
+        lidar_features = lidar_features + lidar_features_layer3
+        radar_features = radar_features + radar_features_layer3
+
+        image_features = self.image_encoder.features.layer4(image_features)
+        lidar_features = self.lidar_encoder._model.layer4(lidar_features)
+        radar_features = self.radar_encoder._model.layer4(radar_features)
+
+        # fusion at (B, 512, 8, 8)
+        image_embd_layer4 = self.avgpool(image_features)  # (bz*seq_len, 512, 8, 8)
+        lidar_embd_layer4 = self.avgpool(lidar_features)  # (bz*seq_len, 512, 8, 8)
+        radar_embd_layer4 = self.avgpool(radar_features)  # (bz*seq_len, 512, 8, 8)
+        gps_embd_layer4 = self.vel_emb4(gps_features_layer3)  # (bz, 2, 512)
+
+        image_features_layer4, lidar_features_layer4, radar_features_layer4, gps_features_layer4 = self.transformer4(
+            image_embd_layer4, lidar_embd_layer4, radar_embd_layer4, gps_embd_layer4)
+        image_features = image_features + image_features_layer4
+        lidar_features = lidar_features + lidar_features_layer4
+        radar_features = radar_features + radar_features_layer4
+
+        image_features = self.image_encoder.features.avgpool(image_features)
+        image_features = torch.flatten(image_features, 1)
+        image_features = image_features.view(bz, self.config.n_views * self.config.seq_len, -1)  # (bz, seq_len, 512)
+        lidar_features = self.lidar_encoder._model.avgpool(lidar_features)
+        lidar_features = torch.flatten(lidar_features, 1)
+        lidar_features = lidar_features.view(bz, self.config.seq_len, -1)
+        radar_features = self.radar_encoder._model.avgpool(radar_features)  # (bz, seq_len, 512)
+        radar_features = torch.flatten(radar_features, 1)
+        radar_features = radar_features.view(bz, self.config.seq_len, -1)  # (bz, seq_len, 512)
+        gps_features = gps_features_layer4  # (bz, 2, 512)
+
+        # time fusion with mamba
+        image_features = self.time_mamba(image_features)    # (bz, seq_len, 512)
+        lidar_features = self.time_mamba(lidar_features)    # (bz, seq_len, 512)
+        radar_features = self.time_mamba(radar_features)    # (bz, seq_len, 512)
+
+        fused_features = torch.cat([image_features, lidar_features, radar_features, gps_features],
+                                   dim=1)  # (1, 17, 512)
+        # fused_features = torch.cat([image_features, lidar_features, radar_features], dim=1)
+
+        fused_features = torch.sum(fused_features, dim=1)  # (1, 17, 512)
+
+        return fused_features
+
+
 class TransFuser(nn.Module):
     '''
     Transformer-based feature fusion followed by GRU-based waypoint prediction network and PID controller
@@ -455,6 +665,7 @@ class TransFuser(nn.Module):
         self.config = config
         self.pred_len = config.pred_len
         self.encoder = Encoder(config).to(self.device)
+        # self.encoder = EncoderWithMamba(config).to(self.device)
 
         self.join = nn.Sequential(
                             nn.Linear(512, 256),
