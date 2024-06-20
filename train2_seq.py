@@ -53,7 +53,8 @@ parser.add_argument('--add_seg', type=int, default=0, help='add segmentation on 
 parser.add_argument('--ema', type=int, default=0, help='exponential moving average')
 parser.add_argument('--flip', type=int, default=0, help='flip all the data to augmentation')
 args = parser.parse_args()
-args.logdir = os.path.join(args.logdir, args.id)
+if args.logdir == 'log':
+	args.logdir = os.path.join(args.logdir, args.id)
 
 writer = SummaryWriter(log_dir=args.logdir)
 class Engine(object):

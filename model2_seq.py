@@ -134,6 +134,23 @@ class Block(nn.Module):
         return x
 
 
+class MambaBlock(nn.Module):
+    """ an unassuming Transformer block """
+
+    def __init__(self, n_embd, d_state, d_conv, expand):
+        super().__init__()
+        self.mamba = Mamba(d_model=n_embd,
+                           d_state=d_state,
+                           d_conv=d_conv,
+                           expand=expand)
+
+    def forward(self, x):
+        B, T, C = x.size()
+
+        x = self.mamba(x)
+        return x
+
+
 class GPT(nn.Module):
     """  the full GPT language model, with a context size of block_size """
 
@@ -246,6 +263,122 @@ class GPT(nn.Module):
         image_tensor_out = x[:, :self.config.n_views*self.seq_len, :, :, :].contiguous().view(bz * self.config.n_views * self.seq_len, -1, h, w)
         lidar_tensor_out = x[:, self.config.n_views*self.seq_len:(self.config.n_views+1)*self.seq_len, :, :, :].contiguous().view(bz * self.seq_len, -1, h, w)
         radar_tensor_out = x[:, (self.config.n_views+1)*self.seq_len:, :, :, :].contiguous().view(bz * self.seq_len, -1, h, w)
+        return image_tensor_out, lidar_tensor_out, radar_tensor_out, pos_tensor_out
+
+
+class MambaFusion(nn.Module):
+    """  the full GPT language model, with a context size of block_size """
+
+    def __init__(self, n_embd, d_state, d_conv, expand, n_layer,
+                 vert_anchors, horz_anchors, seq_len, embd_pdrop, config):
+        super().__init__()
+        self.n_embd = n_embd
+        self.seq_len = seq_len
+        self.vert_anchors = vert_anchors
+        self.horz_anchors = horz_anchors
+        self.config = config
+
+        # positional embedding parameter (learnable), image + lidar
+        self.pos_emb = nn.Parameter(
+            torch.zeros(1, (self.config.n_views + 2) * seq_len * vert_anchors * horz_anchors + 2, n_embd))
+
+        self.drop = nn.Dropout(embd_pdrop)
+
+        # transformer
+        self.mambablocks = nn.Sequential(*[MambaBlock(n_embd, d_state, d_conv, expand)
+                                         for layer in range(n_layer)])
+
+        # decoder head
+        self.ln_f = nn.LayerNorm(n_embd)
+
+        self.block_size = seq_len
+        self.apply(self._init_weights)
+
+    def get_block_size(self):
+        return self.block_size
+
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            module.weight.data.normal_(mean=0.0, std=0.02)
+            if module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, nn.LayerNorm):
+            module.bias.data.zero_()
+            module.weight.data.fill_(1.0)
+
+    def configure_optimizers(self):
+        # separate out all parameters to those that will and won't experience regularizing weight decay
+        decay = set()
+        no_decay = set()
+        whitelist_weight_modules = (torch.nn.Linear, torch.nn.Conv2d)
+        blacklist_weight_modules = (torch.nn.LayerNorm, torch.nn.BatchNorm2d)
+        for mn, m in self.named_modules():
+            for pn, p in m.named_parameters():
+                fpn = '%s.%s' % (mn, pn) if mn else pn  # full param name
+
+                if pn.endswith('bias'):
+                    # all biases will not be decayed
+                    no_decay.add(fpn)
+                elif pn.endswith('weight') and isinstance(m, whitelist_weight_modules):
+                    # weights of whitelist modules will be weight decayed
+                    decay.add(fpn)
+                elif pn.endswith('weight') and isinstance(m, blacklist_weight_modules):
+                    # weights of blacklist modules will NOT be weight decayed
+                    no_decay.add(fpn)
+
+        # special case the position embedding parameter in the root GPT module as not decayed
+        no_decay.add('pos_emb')
+
+        # create the pytorch optimizer object
+        param_dict = {pn: p for pn, p in self.named_parameters()}
+        optim_groups = [
+            {"params": [param_dict[pn] for pn in sorted(list(decay))], "weight_decay": 0.01},
+            {"params": [param_dict[pn] for pn in sorted(list(no_decay))], "weight_decay": 0.0},
+        ]
+
+        return optim_groups
+
+    def forward(self, image_tensor, lidar_tensor, radar_tensor, gps):
+        """
+        Args:
+            image_tensor (tensor): B*4*seq_len, C, H, W
+            lidar_tensor (tensor): B*seq_len, C, H, W
+            gps (tensor): ego-gps
+        """
+
+        bz = lidar_tensor.shape[0] // self.seq_len
+        h, w = lidar_tensor.shape[2:4]
+        #         print('transfo',self.config.n_views , self.seq_len)
+
+        # forward the image model for token embeddings
+        image_tensor = image_tensor.view(bz, self.config.n_views * self.seq_len, -1, h, w)
+        lidar_tensor = lidar_tensor.view(bz, self.seq_len, -1, h, w)
+        radar_tensor = radar_tensor.view(bz, self.seq_len, -1, h, w)
+
+        # pad token embeddings along number of tokens dimension
+        token_embeddings = torch.cat([image_tensor, lidar_tensor, radar_tensor], dim=1).permute(0, 1, 3, 4,
+                                                                                                2).contiguous()
+        # print(token_embeddings.shape)
+        token_embeddings = token_embeddings.view(bz, -1, self.n_embd)  # (B, an * T, C)
+        token_embeddings = torch.cat([token_embeddings, gps], dim=1)
+        # add (learnable) positional embedding and gps embedding for all tokens
+        x = self.drop(self.pos_emb + token_embeddings)  # (B, an * T, C)
+
+        # TODO: replace attention block with Mamba block
+        x = self.mambablocks(x)  # (B, an * T, C)
+        x = self.ln_f(x)  # (B, an * T, C)
+        pos_tensor_out = x[:, (self.config.n_views + 2) * self.seq_len * self.vert_anchors * self.horz_anchors:, :]
+        x = x[:, :(self.config.n_views + 2) * self.seq_len * self.vert_anchors * self.horz_anchors, :]
+
+        x = x.view(bz, (self.config.n_views + 2) * self.seq_len, self.vert_anchors, self.horz_anchors, self.n_embd)
+        x = x.permute(0, 1, 4, 2, 3).contiguous()  # same as token_embeddings
+
+        image_tensor_out = x[:, :self.config.n_views * self.seq_len, :, :, :].contiguous().view(
+            bz * self.config.n_views * self.seq_len, -1, h, w)
+        lidar_tensor_out = x[:, self.config.n_views * self.seq_len:(self.config.n_views + 1) * self.seq_len, :, :,
+                           :].contiguous().view(bz * self.seq_len, -1, h, w)
+        radar_tensor_out = x[:, (self.config.n_views + 1) * self.seq_len:, :, :, :].contiguous().view(bz * self.seq_len,
+                                                                                                      -1, h, w)
         return image_tensor_out, lidar_tensor_out, radar_tensor_out, pos_tensor_out
 
 
@@ -466,50 +599,46 @@ class EncoderWithMamba(nn.Module):
         self.vel_emb3 = nn.Linear(128, 256)
         self.vel_emb4 = nn.Linear(256, 512)
 
-        self.transformer1 = GPT(n_embd=64,
-                                n_head=config.n_head,
-                                block_exp=config.block_exp,
-                                n_layer=config.n_layer,
-                                vert_anchors=config.vert_anchors,
-                                horz_anchors=config.horz_anchors,
-                                seq_len=config.seq_len,
-                                embd_pdrop=config.embd_pdrop,
-                                attn_pdrop=config.attn_pdrop,
-                                resid_pdrop=config.resid_pdrop,
-                                config=config)
-        self.transformer2 = GPT(n_embd=128,
-                                n_head=config.n_head,
-                                block_exp=config.block_exp,
-                                n_layer=config.n_layer,
-                                vert_anchors=config.vert_anchors,
-                                horz_anchors=config.horz_anchors,
-                                seq_len=config.seq_len,
-                                embd_pdrop=config.embd_pdrop,
-                                attn_pdrop=config.attn_pdrop,
-                                resid_pdrop=config.resid_pdrop,
-                                config=config)
-        self.transformer3 = GPT(n_embd=256,
-                                n_head=config.n_head,
-                                block_exp=config.block_exp,
-                                n_layer=config.n_layer,
-                                vert_anchors=config.vert_anchors,
-                                horz_anchors=config.horz_anchors,
-                                seq_len=config.seq_len,
-                                embd_pdrop=config.embd_pdrop,
-                                attn_pdrop=config.attn_pdrop,
-                                resid_pdrop=config.resid_pdrop,
-                                config=config)
-        self.transformer4 = GPT(n_embd=512,
-                                n_head=config.n_head,
-                                block_exp=config.block_exp,
-                                n_layer=config.n_layer,
-                                vert_anchors=config.vert_anchors,
-                                horz_anchors=config.horz_anchors,
-                                seq_len=config.seq_len,
-                                embd_pdrop=config.embd_pdrop,
-                                attn_pdrop=config.attn_pdrop,
-                                resid_pdrop=config.resid_pdrop,
-                                config=config)
+        self.mambafusion1 = MambaFusion(n_embd=64,
+                                        d_state=16,
+                                        d_conv=4,
+                                        expand=2,
+                                        n_layer=config.n_layer,
+                                        vert_anchors=config.vert_anchors,
+                                        horz_anchors=config.horz_anchors,
+                                        seq_len=config.seq_len,
+                                        embd_pdrop=config.embd_pdrop,
+                                        config=config)
+        self.mambafusion2 = MambaFusion(n_embd=128,
+                                        d_state=16,
+                                        d_conv=4,
+                                        expand=2,
+                                        n_layer=config.n_layer,
+                                        vert_anchors=config.vert_anchors,
+                                        horz_anchors=config.horz_anchors,
+                                        seq_len=config.seq_len,
+                                        embd_pdrop=config.embd_pdrop,
+                                        config=config)
+        self.mambafusion3 = MambaFusion(n_embd=256,
+                                        d_state=16,
+                                        d_conv=4,
+                                        expand=2,
+                                        n_layer=config.n_layer,
+                                        vert_anchors=config.vert_anchors,
+                                        horz_anchors=config.horz_anchors,
+                                        seq_len=config.seq_len,
+                                        embd_pdrop=config.embd_pdrop,
+                                        config=config)
+        self.mambafusion4 = MambaFusion(n_embd=512,
+                                        d_state=16,
+                                        d_conv=4,
+                                        expand=2,
+                                        n_layer=config.n_layer,
+                                        vert_anchors=config.vert_anchors,
+                                        horz_anchors=config.horz_anchors,
+                                        seq_len=config.seq_len,
+                                        embd_pdrop=config.embd_pdrop,
+                                        config=config)
         self.time_mamba = Mamba(d_model=512,
                                 d_state=16,
                                 d_conv=4,
@@ -565,7 +694,7 @@ class EncoderWithMamba(nn.Module):
         radar_embd_layer1 = self.avgpool(radar_features)
         gps_embd_layer1 = self.vel_emb1(gps)
 
-        image_features_layer1, lidar_features_layer1, radar_features_layer1, gps_features_layer1 = self.transformer1(
+        image_features_layer1, lidar_features_layer1, radar_features_layer1, gps_features_layer1 = self.mambafusion1(
             image_embd_layer1, lidar_embd_layer1, radar_embd_layer1, gps_embd_layer1)
         image_features_layer1 = F.interpolate(image_features_layer1, scale_factor=8, mode='bilinear')
         lidar_features_layer1 = F.interpolate(lidar_features_layer1, scale_factor=8, mode='bilinear')
@@ -584,7 +713,7 @@ class EncoderWithMamba(nn.Module):
         radar_embd_layer2 = self.avgpool(radar_features)
         gps_embd_layer2 = self.vel_emb2(gps_features_layer1)
 
-        image_features_layer2, lidar_features_layer2, radar_features_layer2, gps_features_layer2 = self.transformer2(
+        image_features_layer2, lidar_features_layer2, radar_features_layer2, gps_features_layer2 = self.mambafusion2(
             image_embd_layer2, lidar_embd_layer2, radar_embd_layer2, gps_embd_layer2)
         image_features_layer2 = F.interpolate(image_features_layer2, scale_factor=4, mode='bilinear')
         lidar_features_layer2 = F.interpolate(lidar_features_layer2, scale_factor=4, mode='bilinear')
@@ -603,7 +732,7 @@ class EncoderWithMamba(nn.Module):
         radar_embd_layer3 = self.avgpool(radar_features)
         gps_embd_layer3 = self.vel_emb3(gps_features_layer2)
 
-        image_features_layer3, lidar_features_layer3, radar_features_layer3, gps_features_layer3 = self.transformer3(
+        image_features_layer3, lidar_features_layer3, radar_features_layer3, gps_features_layer3 = self.mambafusion3(
             image_embd_layer3, lidar_embd_layer3, radar_embd_layer3, gps_embd_layer3)
 
         image_features_layer3 = F.interpolate(image_features_layer3, scale_factor=2, mode='bilinear')
@@ -623,7 +752,7 @@ class EncoderWithMamba(nn.Module):
         radar_embd_layer4 = self.avgpool(radar_features)  # (bz*seq_len, 512, 8, 8)
         gps_embd_layer4 = self.vel_emb4(gps_features_layer3)  # (bz, 2, 512)
 
-        image_features_layer4, lidar_features_layer4, radar_features_layer4, gps_features_layer4 = self.transformer4(
+        image_features_layer4, lidar_features_layer4, radar_features_layer4, gps_features_layer4 = self.mambafusion4(
             image_embd_layer4, lidar_embd_layer4, radar_embd_layer4, gps_embd_layer4)
         image_features = image_features + image_features_layer4
         lidar_features = lidar_features + lidar_features_layer4
@@ -664,8 +793,8 @@ class TransFuser(nn.Module):
         self.device = device
         self.config = config
         self.pred_len = config.pred_len
-        self.encoder = Encoder(config).to(self.device)
-        # self.encoder = EncoderWithMamba(config).to(self.device)
+        # self.encoder = Encoder(config).to(self.device)
+        self.encoder = EncoderWithMamba(config).to(self.device)
 
         self.join = nn.Sequential(
                             nn.Linear(512, 256),

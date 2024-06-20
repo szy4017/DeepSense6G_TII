@@ -19,6 +19,15 @@ retrain base model
 * GPU memory: 10*6=60G for 6 GPUs
 * train_time: 8min\*150=1200min=20h
 
+train mamba modal
+* batch_size: 24
+* GPU memory: 5\*6=30G for 6 GPUs
+* train_time: 14min\*150=2100min=35h
+
+### Commands
+tensorboard --logdir log --host=10.15.198.46 --port=6007
+python train2_seq.py --epochs 30 --batch_size 24 --logdir 'log/20240619_165326'
+
 ## Problem Statement
 The objective of the challenge is to design a machine learning solution that takes a sequence of 5 samples camera, LiDAR, radar sensor data and 2 samples user GPS data, to predict the optimal beam index. 
 
