@@ -426,25 +426,25 @@ class Encoder(nn.Module):
                             resid_pdrop=config.resid_pdrop,
                             config=config)
         self.transformer3 = GPT(n_embd=256,
-                            n_head=config.n_head, 
-                            block_exp=config.block_exp, 
-                            n_layer=config.n_layer, 
-                            vert_anchors=config.vert_anchors, 
-                            horz_anchors=config.horz_anchors, 
-                            seq_len=config.seq_len, 
-                            embd_pdrop=config.embd_pdrop, 
-                            attn_pdrop=config.attn_pdrop, 
+                            n_head=config.n_head,
+                            block_exp=config.block_exp,
+                            n_layer=config.n_layer,
+                            vert_anchors=config.vert_anchors,
+                            horz_anchors=config.horz_anchors,
+                            seq_len=config.seq_len,
+                            embd_pdrop=config.embd_pdrop,
+                            attn_pdrop=config.attn_pdrop,
                             resid_pdrop=config.resid_pdrop,
                             config=config)
         self.transformer4 = GPT(n_embd=512,
-                            n_head=config.n_head, 
-                            block_exp=config.block_exp, 
-                            n_layer=config.n_layer, 
-                            vert_anchors=config.vert_anchors, 
-                            horz_anchors=config.horz_anchors, 
-                            seq_len=config.seq_len, 
-                            embd_pdrop=config.embd_pdrop, 
-                            attn_pdrop=config.attn_pdrop, 
+                            n_head=config.n_head,
+                            block_exp=config.block_exp,
+                            n_layer=config.n_layer,
+                            vert_anchors=config.vert_anchors,
+                            horz_anchors=config.horz_anchors,
+                            seq_len=config.seq_len,
+                            embd_pdrop=config.embd_pdrop,
+                            attn_pdrop=config.attn_pdrop,
                             resid_pdrop=config.resid_pdrop,
                             config=config)
 
@@ -525,7 +525,7 @@ class Encoder(nn.Module):
         image_features = self.image_encoder.features.layer3(image_features)
         lidar_features = self.lidar_encoder._model.layer3(lidar_features)
         radar_features = self.radar_encoder._model.layer3(radar_features)
-
+        # gps_embd_layer3 = self.vel_emb3(gps_features_layer2)
 
         # fusion at (B, 256, 16, 16)
         image_embd_layer3 = self.avgpool(image_features)
@@ -567,11 +567,12 @@ class Encoder(nn.Module):
         radar_features = torch.flatten(radar_features, 1)
         radar_features = radar_features.view(bz, self.config.seq_len, -1)   # (bz, seq_len, 512)
         gps_features = gps_features_layer4  # (bz, 2, 512)
+        # gps_features = gps_embd_layer3
 
         fused_features = torch.cat([image_features, lidar_features, radar_features, gps_features], dim=1)   # (1, 17, 512)
         # fused_features = torch.cat([image_features, lidar_features, radar_features], dim=1)
 
-        fused_features = torch.sum(fused_features, dim=1)   # (1, 17, 512)
+        fused_features = torch.sum(fused_features, dim=1)   # (1, 512)
 
         return fused_features
 
@@ -792,8 +793,8 @@ class TransFuser(nn.Module):
         self.device = device
         self.config = config
         self.pred_len = config.pred_len
-        self.encoder = Encoder(config).to(self.device)
-        # self.encoder = EncoderWithMamba(config).to(self.device)
+        # self.encoder = Encoder(config).to(self.device)
+        self.encoder = EncoderWithMamba(config).to(self.device)
 
         self.join = nn.Sequential(
                             nn.Linear(512, 256),
@@ -802,8 +803,8 @@ class TransFuser(nn.Module):
                             nn.ReLU(inplace=True),
                             nn.Linear(128, 64),
                         ).to(self.device)
-        # self.decoder = nn.GRUCell(input_size=2, hidden_size=64).to(self.device)
-        # self.output = nn.Linear(64, 2).to(self.device)
+        self.decoder = nn.GRUCell(input_size=64, hidden_size=64).to(self.device)
+        self.output = nn.Linear(64, 64).to(self.device)
         
     def forward(self, image_list, lidar_list, radar_list, gps):
         '''
@@ -817,6 +818,20 @@ class TransFuser(nn.Module):
         fused_features = self.encoder(image_list, lidar_list, radar_list, gps)
         z = self.join(fused_features)
 
-       
+        output_wp = list()
 
-        return z
+        # initial input variable to GRU
+        x = torch.zeros(size=(z.shape[0], 64), dtype=z.dtype).to(self.device)
+
+        # autoregressive generation of output waypoints
+        for _ in range(self.pred_len):
+            # x_in = torch.cat([x, target_point], dim=1)
+            x_in = x
+            z = self.decoder(x_in, z)
+            dx = self.output(z)
+            x = dx + x
+            output_wp.append(x)
+
+        pred_wp = torch.stack(output_wp, dim=1)
+
+        return pred_wp
