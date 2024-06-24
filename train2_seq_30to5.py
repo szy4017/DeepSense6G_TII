@@ -116,6 +116,8 @@ class Engine(object):
 			gt_beam_all.append(gt_beamidx.cpu().numpy())
 			pred_beam_all.append(torch.argsort(pred_beams, dim=-1, descending=True).cpu().numpy())
 			loss.backward()
+			# add clip grad
+			torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=3.0)
 			loss_epoch += float(loss.item())
 			pbar.set_description(str(loss.item()))
 			num_batches += 1
