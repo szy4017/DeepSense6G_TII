@@ -17,6 +17,9 @@ class GlobalConfig:
 
     lr = 1e-4 # learning rate
 
+    # Modality missing set
+    modality_missing = None
+
     # Conv Encoder
     vert_anchors = 8
     horz_anchors = 8

@@ -22,7 +22,16 @@ retrain base model
 train mamba modal
 * batch_size: 24
 * GPU memory: 5\*6=30G for 6 GPUs
-* train_time: 14min\*150=2100min=35h
+* train_time: 14min\*30=420min=7h
+
+train bimamba modal
+```
+python train2_seq.py --epochs 50 --batch_size 24
+```
+* batch_size: 24
+* GPU memory: 7\*6=42G for 6 GPUs
+* Params: 103MB
+* train_time: 14min\*50=420=7h
 
 # 实验中的问题
 ## Problem 1
@@ -46,13 +55,39 @@ python train2_seq_30to5.py --epochs 50 --batch_size 12 --lr 1e-4
 
 ## Solution (3)
 在mambafusion中采用双边mamba编码
-```
-python train2_seq_30to5.py --epochs 50 --batch_size 12 --lr 1e-4
-```
 * self.ln1 = nn.LayerNorm(ln_size)
 * x_fused = torch.add(torch.mul(x_bm, x_relu), torch.mul(x_fm, x_bm))
 * torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+```
+python train2_seq_30to5.py --epochs 50 --batch_size 12 --lr 1e-4
+```
 结果：解决梯度爆炸问题，loss正常下降且性能稳定，best_DBA_score_scenario_all=0.9142 > 0.4671 (baseline)
+
+## TODO
+### missing modality rebuild
+1. 测试baseline: upper limit->multi-training and inference; lower limit->multi-training and missing inference;
+2. 基于SimMMDG构建modality rebuild模块，实现对missing modality的生成;
+3. 主要参考指标 DBA_score_val_scenario_all
+```
+python train2_seq.py --batch_size 24 --Val 1 --modality_missing image --loda_model_path log/log_mambafusion_50epoch_5to1_bimamba/best_model.pth
+```
+
+| model | upper  | image-rebuild | lower-image-miss | radar-rebuild | lower-radar-miss | lidar-rebuild | lower-lidar-miss |
+|-------|--------|---------------|------------------|---------------|------------------|---------------|------------------|
+| mamba | 0.9108 |               | 0.1903           |               | 0.9042           |               | 0.8929           |            |
+log_path: log/log_mambafusion_50epoch_5to1_bimamba/best_model.pth
+
+Metrics on no missing
+![log_no_missing](./Materials/log_no_missing.png)
+
+Metrics on image missing
+![log_image_missing](./Materials/log_image_missing.png)
+
+Metrics on radar missing
+![log_radar_missing](./Materials/log_radar_missing.png)
+
+Metrics on lidar missing
+![log_lidar_missing](./Materials/log_lidar_missing.png)
 
 ### Commands
 tensorboard --logdir log --host=10.15.198.46 --port=6007

@@ -134,7 +134,7 @@ class Block(nn.Module):
         return x
 
 class MambaBlock(nn.Module):
-    """ an unassuming Transformer block """
+    """ a bi-branch Mamba block """
 
     def __init__(self, n_embd, ln_size, d_state, d_conv, expand):
         super().__init__()
@@ -287,7 +287,7 @@ class GPT(nn.Module):
 
 
 class MambaFusion(nn.Module):
-    """  the full GPT language model, with a context size of block_size """
+    """  the full mamba model, with a context size of block_size """
 
     def __init__(self, n_embd, ln_size, d_state, d_conv, expand, n_layer,
                  vert_anchors, horz_anchors, seq_len, embd_pdrop, config):
@@ -384,7 +384,7 @@ class MambaFusion(nn.Module):
         # add (learnable) positional embedding and gps embedding for all tokens
         x = self.drop(self.pos_emb + token_embeddings)  # (B, an * T, C)
 
-        # TODO: dual path mamba encoding
+        # bi-path mamba encoding
         x = self.mambablocks(x)  # (B, an * T, C)
         x = self.ln_f(x)  # (B, an * T, C)
         pos_tensor_out = x[:, (self.config.n_views + 2) * self.seq_len * self.vert_anchors * self.horz_anchors:, :]
@@ -599,8 +599,9 @@ class Encoder(nn.Module):
 
 class EncoderWithMamba(nn.Module):
     """
-    Multi-scale Fusion Transformer for image + LiDAR feature fusion
-    Add Mamba block for time sequence fusion
+    Multi-scale Fusion Mamba for image + Radar + LiDAR feature fusion
+    Use bibranch Mamba block for feature fusion
+    Use Mamba block for time fusion
     """
 
     def __init__(self, config):

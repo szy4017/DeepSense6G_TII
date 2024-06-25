@@ -45,7 +45,10 @@ parser.add_argument('--load_previous_best', type=int, default=0, help='load prev
 parser.add_argument('--temp_coef', type=int, default=1, help='apply temperature coefficience on the target')
 parser.add_argument('--train_adapt_together', type=int, default=1, help='combine train and adaptation dataset together')
 parser.add_argument('--finetune', type=int, default=0, help='first train on development set and finetune on 31-34 set')
+parser.add_argument('--Val', type=int, default=0, help='Val')
 parser.add_argument('--Test', type=int, default=0, help='Test')
+parser.add_argument('--modality_missing', type=str, default=None, help='modality missing')
+parser.add_argument('--load_model_path', type=str, default=None, help='load model param for valuating')
 parser.add_argument('--augmentation', type=int, default=1, help='data augmentation of camera and lidar')
 parser.add_argument('--angle_norm', type=int, default=1, help='normlize the gps loc with unit, angle can be obtained')
 parser.add_argument('--custom_FoV_lidar', type=int, default=1, help='Custom FoV of lidar')
@@ -55,6 +58,10 @@ parser.add_argument('--flip', type=int, default=0, help='flip all the data to au
 args = parser.parse_args()
 if args.logdir == 'log':
 	args.logdir = os.path.join(args.logdir, args.id)
+if args.Val:
+	args.logdir = args.logdir + '_val'
+if args.modality_missing is not None:
+	args.logdir = args.logdir + '_' + args.modality_missing
 
 writer = SummaryWriter(log_dir=args.logdir)
 class Engine(object):
@@ -408,6 +415,7 @@ config.angle_norm = args.angle_norm
 config.custom_FoV_lidar=args.custom_FoV_lidar
 config.filtered = args.filtered
 config.add_seg = args.add_seg
+config.modality_missing = args.modality_missing
 data_root = config.data_root	# path to the dataset
 
 import random
@@ -505,6 +513,13 @@ if args.Test:
 	test_set = CARLA_Data(root=test_root, root_csv=test_root_csv, config=config, test=True)
 	print('test_set:', len(test_set))
 	dataloader_test = DataLoader(test_set, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=False)
+elif args.Val:
+	# use adaptation dataset for testing
+	# val_root = data_root + '/Adaptation_dataset_multi_modal/'
+	# val_root_csv = 'ml_challenge_data_adaptation_multi_modal.csv'
+	# val_set = CARLA_Data(root=val_root, root_csv=val_root_csv, config=config, test=False)
+	print('val_set:', len(val_set))
+	dataloader_val = DataLoader(val_set, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=False)
 else:
 	dataloader_train = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=8, pin_memory=True,
 								  worker_init_fn=seed_worker, generator=g)
@@ -526,7 +541,8 @@ if args.scheduler:#Cyclic Cosine Decay Learning Rate
 trainer = Engine()
 model_parameters = filter(lambda p: p.requires_grad, model.parameters())
 params = sum([np.prod(p.size()) for p in model_parameters])
-print ('======Total trainable parameters: ', params)
+print('======Total trainable parameters: ', params)
+print('======Modality missing: ', config.modality_missing)
 
 # Create logdir
 if not os.path.isdir(args.logdir):
@@ -559,10 +575,12 @@ elif os.path.isfile(os.path.join(args.logdir, 'recent.log')):
 			print('======loading '+kw+' model')
 			model.load_state_dict(torch.load(os.path.join(args.logdir, kw+'model.pth')))
 	else:
-		print('======loading best_model')
-		print('======No checkpoint for best_model')
-		# model.load_state_dict(torch.load(os.path.join(args.logdir, 'best_model.pth')))
+		print('======No model loading')
 
+# Load model path for valuating
+if args.Val and args.load_model_path is not None:
+	model.load_state_dict(torch.load(args.load_model_path))
+	print('======loading model path from {}'.format(args.load_model_path))
 
 ema = EMA(model, 0.999)
 
@@ -575,6 +593,9 @@ with open(os.path.join(args.logdir, 'args.txt'), 'w') as f:
 if args.Test:
 	trainer.test()
 	print('Test finish')
+elif args.Val:
+	trainer.validate()
+	print('Val finish')
 else:
 	for epoch in range(trainer.cur_epoch, args.epochs):
 		print('epoch:',epoch)

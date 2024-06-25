@@ -165,7 +165,7 @@ def createDataset(InputFile, OutputFile, Keyword):
 data_root = './Dataset'
 trainval_root = data_root+'/Multi_Modal/'
 train_root_csv ='ml_challenge_dev_multi_modal_30to5.csv'
-createRootCSV(trainval_root, train_root_csv, seq_len=20, pred_len=5)
+createRootCSV(trainval_root, train_root_csv, seq_len=10, pred_len=5)
 
 data_root = './Dataset'
 trainval_root = data_root+'/Multi_Modal/'

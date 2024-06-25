@@ -3,7 +3,7 @@ import os
 class GlobalConfig:
     """ base architecture configurations """
 	# Data
-    seq_len = 20 # input timesteps
+    seq_len = 10 # input timesteps
     pred_len = 5 # future waypoints predicted
 
     data_root = './Dataset'#path to the dataset

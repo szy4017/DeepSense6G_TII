@@ -20,7 +20,7 @@ class ImageCNN(nn.Module):
     def __init__(self, c_dim, normalize=True):
         super().__init__()
         self.normalize = normalize
-        self.features = models.resnet34(pretrained =True)
+        self.features = models.resnet34(weights=True)
         self.features.fc = nn.Sequential()
         # for param in self.features.parameters():
         #     param.requires_grad = False
@@ -56,7 +56,7 @@ class LidarEncoder(nn.Module):
     def __init__(self, num_classes=512, in_channels=2):
         super().__init__()
 
-        self._model = models.resnet18(pretrained =True)
+        self._model = models.resnet18(weights=True)
         self._model.fc = nn.Sequential()
         _tmp = self._model.conv1
         self._model.conv1 = nn.Conv2d(in_channels, out_channels=_tmp.out_channels, 
@@ -135,20 +135,41 @@ class Block(nn.Module):
 
 
 class MambaBlock(nn.Module):
-    """ an unassuming Transformer block """
+    """ a bi-branch Mamba block """
 
-    def __init__(self, n_embd, d_state, d_conv, expand):
+    def __init__(self, n_embd, ln_size, d_state, d_conv, expand):
         super().__init__()
-        self.mamba = Mamba(d_model=n_embd,
-                           d_state=d_state,
-                           d_conv=d_conv,
-                           expand=expand)
+        self.ln1 = nn.LayerNorm(ln_size)
+        self.fc1 = nn.Linear(n_embd, n_embd)
+        self.fc2 = nn.Linear(n_embd, n_embd)
+        self.relu = nn.LeakyReLU(negative_slope=0.2)
+        self.forward_mamba = Mamba(d_model=n_embd,
+                                   d_state=d_state,
+                                   d_conv=d_conv,
+                                   expand=expand)
+        self.backward_mamba = Mamba(d_model=n_embd,
+                                    d_state=d_state,
+                                    d_conv=d_conv,
+                                    expand=expand)
 
     def forward(self, x):
         B, T, C = x.size()
+        x_ln = self.ln1(x)
 
-        x = self.mamba(x)
-        return x
+        x_fc1 = self.fc1(x_ln)
+        # forward mamba
+        x_fm = self.forward_mamba(x_fc1)
+        # backward mamba
+        x_fc1 = torch.flip(x_fc1, dims=[1])
+        x_bm = self.backward_mamba(x_fc1)
+
+        x_fc2 = self.fc2(x_fc1)
+        x_relu = self.relu(x_fc2)
+
+        # fuse forward and backward feature
+        x_fused = torch.add(torch.mul(x_bm, x_relu), torch.mul(x_fm, x_bm))
+
+        return x_fused
 
 
 class GPT(nn.Module):
@@ -267,9 +288,9 @@ class GPT(nn.Module):
 
 
 class MambaFusion(nn.Module):
-    """  the full GPT language model, with a context size of block_size """
+    """  the full mamba model, with a context size of block_size """
 
-    def __init__(self, n_embd, d_state, d_conv, expand, n_layer,
+    def __init__(self, n_embd, ln_size, d_state, d_conv, expand, n_layer,
                  vert_anchors, horz_anchors, seq_len, embd_pdrop, config):
         super().__init__()
         self.n_embd = n_embd
@@ -285,7 +306,7 @@ class MambaFusion(nn.Module):
         self.drop = nn.Dropout(embd_pdrop)
 
         # transformer
-        self.mambablocks = nn.Sequential(*[MambaBlock(n_embd, d_state, d_conv, expand)
+        self.mambablocks = nn.Sequential(*[MambaBlock(n_embd, ln_size, d_state, d_conv, expand)
                                          for layer in range(n_layer)])
 
         # decoder head
@@ -364,7 +385,7 @@ class MambaFusion(nn.Module):
         # add (learnable) positional embedding and gps embedding for all tokens
         x = self.drop(self.pos_emb + token_embeddings)  # (B, an * T, C)
 
-        # TODO: replace attention block with Mamba block
+        # bi-path mamba encoding
         x = self.mambablocks(x)  # (B, an * T, C)
         x = self.ln_f(x)  # (B, an * T, C)
         pos_tensor_out = x[:, (self.config.n_views + 2) * self.seq_len * self.vert_anchors * self.horz_anchors:, :]
@@ -578,8 +599,9 @@ class Encoder(nn.Module):
 
 class EncoderWithMamba(nn.Module):
     """
-    Multi-scale Fusion Transformer for image + LiDAR feature fusion
-    Add Mamba block for time sequence fusion
+    Multi-scale Fusion Mamba for image + Radar + LiDAR feature fusion
+    Use bibranch Mamba block for feature fusion
+    Use Mamba block for time fusion
     """
 
     def __init__(self, config):
@@ -592,6 +614,7 @@ class EncoderWithMamba(nn.Module):
             self.radar_encoder = LidarEncoder(num_classes=512, in_channels=2)
         else:
             self.radar_encoder = LidarEncoder(num_classes=512, in_channels=1)
+        self.missing = self.config.modality_missing
 
         self.vel_emb1 = nn.Linear(2, 64)
         self.vel_emb2 = nn.Linear(64, 128)
@@ -599,6 +622,7 @@ class EncoderWithMamba(nn.Module):
         self.vel_emb4 = nn.Linear(256, 512)
 
         self.mambafusion1 = MambaFusion(n_embd=64,
+                                        ln_size=(962, 64),
                                         d_state=16,
                                         d_conv=4,
                                         expand=2,
@@ -609,6 +633,7 @@ class EncoderWithMamba(nn.Module):
                                         embd_pdrop=config.embd_pdrop,
                                         config=config)
         self.mambafusion2 = MambaFusion(n_embd=128,
+                                        ln_size=(962, 128),
                                         d_state=16,
                                         d_conv=4,
                                         expand=2,
@@ -619,6 +644,7 @@ class EncoderWithMamba(nn.Module):
                                         embd_pdrop=config.embd_pdrop,
                                         config=config)
         self.mambafusion3 = MambaFusion(n_embd=256,
+                                        ln_size=(962, 256),
                                         d_state=16,
                                         d_conv=4,
                                         expand=2,
@@ -629,6 +655,7 @@ class EncoderWithMamba(nn.Module):
                                         embd_pdrop=config.embd_pdrop,
                                         config=config)
         self.mambafusion4 = MambaFusion(n_embd=512,
+                                        ln_size=(962, 512),
                                         d_state=16,
                                         d_conv=4,
                                         expand=2,
@@ -642,6 +669,21 @@ class EncoderWithMamba(nn.Module):
                                 d_state=16,
                                 d_conv=4,
                                 expand=2)
+
+    def modality_missing(self, input_tensor, miss):
+        image, lidar, radar = input_tensor
+        device = image.device
+        if miss == None:
+            return [image, lidar, radar]
+        elif miss == 'image':
+            image_missing = torch.zeros_like(image).to(device)
+            return [image_missing, lidar, radar]
+        elif miss == 'lidar':
+            lidar_missing = torch.zeros_like(lidar).to(device)
+            return [image, lidar_missing, radar]
+        elif miss == 'radar':
+            radar_missing = torch.zeros_like(radar).to(device)
+            return [image, lidar, radar_missing]
 
     def forward(self, image_list, lidar_list, radar_list, gps):
         '''
@@ -667,6 +709,9 @@ class EncoderWithMamba(nn.Module):
                                                            h, w)  # (bz*seq_len, lidar_c, h, w)
         radar_tensor = torch.stack(radar_list, dim=1).view(bz * self.config.seq_len, radar_channel,
                                                            h, w)  # (bz*seq_len, radar_c, h, w)
+
+        # TODO: input tensor missing
+        image_tensor, lidar_tensor, radar_tensor = self.modality_missing([image_tensor, lidar_tensor, radar_tensor], self.missing)
 
         image_features = self.image_encoder.features.conv1(image_tensor)
         image_features = self.image_encoder.features.bn1(image_features)
@@ -792,8 +837,8 @@ class TransFuser(nn.Module):
         self.device = device
         self.config = config
         self.pred_len = config.pred_len
-        self.encoder = Encoder(config).to(self.device)
-        # self.encoder = EncoderWithMamba(config).to(self.device)
+        # self.encoder = Encoder(config).to(self.device)
+        self.encoder = EncoderWithMamba(config).to(self.device)
 
         self.join = nn.Sequential(
                             nn.Linear(512, 256),
