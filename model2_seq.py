@@ -592,7 +592,7 @@ class Encoder(nn.Module):
         fused_features = torch.cat([image_features, lidar_features, radar_features, gps_features], dim=1)   # (1, 17, 512)
         # fused_features = torch.cat([image_features, lidar_features, radar_features], dim=1)
 
-        fused_features = torch.sum(fused_features, dim=1)   # (1, 17, 512)
+        fused_features = torch.sum(fused_features, dim=1)   # (1, 512)
 
         return fused_features
 
@@ -675,6 +675,9 @@ class EncoderWithMamba(nn.Module):
         device = image.device
         if miss == None:
             return [image, lidar, radar]
+            # lidar_missing = torch.zeros_like(lidar).to(device)
+            # radar_missing = torch.zeros_like(radar).to(device)
+            # return [image, lidar_missing, radar_missing]
         elif miss == 'image':
             image_missing = torch.zeros_like(image).to(device)
             return [image_missing, lidar, radar]
@@ -710,7 +713,7 @@ class EncoderWithMamba(nn.Module):
         radar_tensor = torch.stack(radar_list, dim=1).view(bz * self.config.seq_len, radar_channel,
                                                            h, w)  # (bz*seq_len, radar_c, h, w)
 
-        # TODO: input tensor missing
+        # input tensor missing
         image_tensor, lidar_tensor, radar_tensor = self.modality_missing([image_tensor, lidar_tensor, radar_tensor], self.missing)
 
         image_features = self.image_encoder.features.conv1(image_tensor)
