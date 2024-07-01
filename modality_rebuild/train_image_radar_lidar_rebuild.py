@@ -324,6 +324,7 @@ class Engine(object):
                 images.append(data['fronts'][i].to(args.device, dtype=torch.float32))
                 lidars.append(data['lidars'][i].to(args.device, dtype=torch.float32))
                 radars.append(data['radars'][i].to(args.device, dtype=torch.float32))
+            images = [normalize_imagenet(image) for image in images]
             bz, _, h, w = images[0].shape
             img_channel = images[0].shape[1]
             lidar_channel = lidars[0].shape[1]
@@ -403,8 +404,9 @@ class Engine(object):
             elif 'radar' in args.target_domain:
                 target_feat = radar_feat_l1
             s2t_feat = feat_trans_l1(source_feat_l1)   # (bz*seq_len, 64, 64*64)
-            s2t_feat = s2t_feat/torch.norm(s2t_feat, dim=1, keepdim=True)
-            loss_trans = torch.mean(torch.norm(s2t_feat-target_feat/torch.norm(target_feat, dim=1, keepdim=True), dim=1))
+            # s2t_feat = s2t_feat/torch.norm(s2t_feat, dim=1, keepdim=True)
+            # loss_trans = torch.mean(torch.norm(s2t_feat-target_feat/torch.norm(target_feat, dim=1, keepdim=True), dim=1))
+            loss_trans = F.mse_loss(s2t_feat, target_feat)
             # print(loss_trans)
 
             # loss backward
