@@ -21,6 +21,7 @@ from scheduler import CyclicCosineDecayLR
 
 from config_seq import GlobalConfig
 from data2_seq import CARLA_Data
+from model2_seq import TransFuser
 
 import torchvision
 
@@ -76,6 +77,18 @@ def compute_DBA_score(y_pred, y_true, max_k=3, delta=5):
 		yk[k] = 1 - acc_avg_min_beam_dist / n_samples
 
 	return np.mean(yk)
+
+class FocalLoss(nn.Module):
+	def __init__(self, gamma=2, alpha=0.25):
+		super(FocalLoss, self).__init__()
+		self.gamma = gamma
+		self.alpha = alpha
+	def __call__(self, input, target):
+		if len(target.shape) == 1:
+			target = torch.nn.functional.one_hot(target, num_classes=64)
+		loss = torchvision.ops.sigmoid_focal_loss(input, target.float(), alpha=self.alpha, gamma=self.gamma,
+												  reduction='mean')
+		return loss
 
 class ContrastiveLoss(nn.Module):
     """Supervised Contrastive Learning: https://arxiv.org/pdf/2004.11362.pdf.
@@ -281,6 +294,8 @@ class Engine(object):
         self.bestval = 0
         if args.loss == 'ce':  # crossentropy loss
             self.criterion = torch.nn.CrossEntropyLoss(reduction='mean')
+        elif args.loss == 'focal':  # focal loss
+            self.criterion = FocalLoss()
 
     def train(self):
         loss_epoch = 0.
@@ -381,13 +396,14 @@ class Engine(object):
                 elif m == 'radar':
                     source_feat.append(radar_shared_l1)
             source_feat_l1 = torch.cat(source_feat, dim=1)    # (bz*seq_len, 128, 64*64)
-            if 'image' in args.source_domain:
+            if 'image' in args.target_domain:
                 target_feat = image_feat_l1
-            elif 'lidar' in args.source_domain:
+            elif 'lidar' in args.target_domain:
                 target_feat = lidar_feat_l1
-            elif 'radar' in args.source_domain:
+            elif 'radar' in args.target_domain:
                 target_feat = radar_feat_l1
             s2t_feat = feat_trans_l1(source_feat_l1)   # (bz*seq_len, 64, 64*64)
+            s2t_feat = s2t_feat/torch.norm(s2t_feat, dim=1, keepdim=True)
             loss_trans = torch.mean(torch.norm(s2t_feat-target_feat/torch.norm(target_feat, dim=1, keepdim=True), dim=1))
             # print(loss_trans)
 
@@ -407,6 +423,9 @@ class Engine(object):
             writer.add_scalar('curr_iter_loss_contrast', float(loss_contrast.item()), self.cur_iter)
             writer.add_scalar('curr_iter_loss_distance', float(loss_distance.item()), self.cur_iter)
 
+            # if self.cur_iter > 100:
+            #     break
+
         # time.sleep(100)
         # pred_beam_all = np.squeeze(np.concatenate(pred_beam_all, 0))
         # gt_beam_all = np.squeeze(np.concatenate(gt_beam_all, 0))
@@ -421,6 +440,168 @@ class Engine(object):
         # for i in range(len(curr_acc)):
         #     writer.add_scalars('curr_acc_train', {'beam' + str(i): curr_acc[i]}, self.cur_epoch)
         writer.add_scalar('curr_loss_train', loss_epoch, self.cur_epoch)
+
+    def validate(self):
+        fusion_model.eval()
+        image_projection_l1.eval()
+        lidar_projection_l1.eval()
+        radar_projection_l1.eval()
+        feat_trans_l1.eval()
+        running_acc = 0.0
+        with torch.no_grad():
+            num_batches = 0
+            wp_epoch = 0.
+            gt_beam_all = []
+            pred_beam_all = []
+            scenario_all = []
+            # Validation loop
+            for batch_num, data in enumerate(tqdm(dataloader_val), 0):
+                # create batch and move to GPU
+                images = []
+                lidars = []
+                radars = []
+                gps = data['gps'].to(args.device, dtype=torch.float32)
+                for i in range(config.seq_len):
+                    images.append(data['fronts'][i].to(args.device, dtype=torch.float32))
+                    lidars.append(data['lidars'][i].to(args.device, dtype=torch.float32))
+                    radars.append(data['radars'][i].to(args.device, dtype=torch.float32))
+                velocity = torch.zeros((data['fronts'][0].shape[0])).to(args.device, dtype=torch.float32)
+                bz, _, h, w = images[0].shape
+                img_channel = images[0].shape[1]
+                lidar_channel = lidars[0].shape[1]
+                radar_channel = radars[0].shape[1]
+
+                source_list = []
+                if 'image' in args.source_domain:
+                    source_list.append(torch.stack(images, dim=1).view(bz * config.seq_len, img_channel, h, w))
+                else:
+                    source_list.append(None)
+                if 'lidar' in args.source_domain:
+                    source_list.append(torch.stack(lidars, dim=1).view(bz * config.seq_len, lidar_channel, h, w))
+                else:
+                    source_list.append(None)
+                if 'radar' in args.source_domain:
+                    source_list.append(torch.stack(radars, dim=1).view(bz * config.seq_len, radar_channel, h, w))
+                else:
+                    source_list.append(None)
+                rebuild_feat_list = self.modality_rebuild(source_list)
+
+                pred_beams = fusion_model(images, lidars, radars, gps, rebuild_feat_list)
+                gt_beam_all.append(data['beamidx'][0])
+                gt_beams = data['beam'][0].to(args.device, dtype=torch.float32)
+                gt_beamidx = data['beamidx'][0].to(args.device, dtype=torch.long)
+                pred_beam_all.append(torch.argsort(pred_beams, dim=1, descending=True).cpu().numpy())
+                running_acc += (torch.argmax(pred_beams, dim=1) == gt_beamidx).sum().item()
+                if args.temp_coef:
+                    loss = self.criterion(pred_beams, gt_beams)
+                else:
+                    loss = self.criterion(pred_beams, gt_beamidx)
+                wp_epoch += float(loss.item())
+                num_batches += 1
+                scenario_all.append(data['scenario'])
+            pred_beam_all = np.squeeze(np.concatenate(pred_beam_all, 0))
+            gt_beam_all = np.squeeze(np.concatenate(gt_beam_all, 0))
+            scenario_all = np.squeeze(np.concatenate(scenario_all, 0))
+            # calculate accuracy and DBA score according to different scenarios
+            scenarios = ['scenario31', 'scenario32', 'scenario33', 'scenario34']
+            for s in scenarios:
+                beam_scenario_index = np.array(scenario_all) == s
+                if np.sum(beam_scenario_index) > 0:
+                    curr_acc_s = compute_acc(pred_beam_all[beam_scenario_index], gt_beam_all[beam_scenario_index],
+                                             top_k=[1, 2, 3])
+                    DBA_score_s = compute_DBA_score(pred_beam_all[beam_scenario_index],
+                                                    gt_beam_all[beam_scenario_index], max_k=3, delta=5)
+                    print(s, ' curr_acc: ', curr_acc_s, ' DBA_score: ', DBA_score_s)
+                    for i in range(len(curr_acc_s)):
+                        writer.add_scalars('curr_acc_val', {s + 'beam' + str(i): curr_acc_s[i]}, self.cur_epoch)
+                    writer.add_scalars('DBA_score_val', {s: DBA_score_s}, self.cur_epoch)
+
+            curr_acc = compute_acc(pred_beam_all, gt_beam_all, top_k=[1, 2, 3])
+            DBA_score_val = compute_DBA_score(pred_beam_all, gt_beam_all, max_k=3, delta=5)
+            wp_loss = wp_epoch / float(num_batches)
+            tqdm.write(f'Epoch {self.cur_epoch:03d}, Batch {batch_num:03d}:' + f' Wp: {wp_loss:3.3f}')
+            print('Val top beam acc: ', curr_acc, 'DBA score: ', DBA_score_val)
+            writer.add_scalars('DBA_score_val', {'scenario_all': DBA_score_val}, self.cur_epoch)
+            writer.add_scalar('curr_loss_val', wp_loss, self.cur_epoch)
+
+            self.val_loss.append(wp_loss)
+            self.DBA.append(DBA_score_val)
+
+    def modality_rebuild(self, source_list):
+        image_tensor, lidar_tensor, radar_tensor = source_list
+        if image_tensor is not None:
+            image_feature = image_encoder(image_tensor)
+            bz, c, h, w = image_feature.shape
+            image_feature = image_feature.view(bz, c, -1)
+            image_proj = image_projection_l1(image_feature)
+        if lidar_tensor is not None:
+            lidar_feature = lidar_encoder(lidar_tensor)
+            bz, c, h, w = lidar_feature.shape
+            lidar_feature = lidar_feature.view(bz, c, -1)
+            lidar_proj = lidar_projection_l1(lidar_feature)
+        if radar_tensor is not None:
+            radar_feature = radar_encoder(radar_tensor)
+            bz, c, h, w = radar_feature.shape
+            radar_feature = radar_feature.view(bz, c, -1)
+            radar_proj = radar_projection_l1(radar_feature)
+
+        if 'image' in args.target_domain:
+            s1 = lidar_proj
+            s2 = radar_proj
+        elif 'lidar' in args.target_domain:
+            s1 = image_proj
+            s2 = radar_proj
+        elif 'radar' in args.target_domain:
+            s1 = image_proj
+            s2 = lidar_proj
+        split_num = int(s1.shape[1] / 2)
+        source_shared_feat = torch.cat([s1[:, :split_num, :], s2[:, :split_num, :]], dim=1)
+        s2t_feat = feat_trans_l1(source_shared_feat)
+        s2t_feat = s2t_feat.view(int(bz/5), 5, c, h, w)
+        return [s2t_feat]
+
+    def save(self):
+        save_best = False
+        print('best', self.bestval, self.bestval_epoch)
+
+        if self.DBA[-1] >= self.bestval:
+            self.bestval = self.DBA[-1]
+            self.bestval_epoch = self.cur_epoch
+            save_best = True
+
+        # Create a dictionary of all data to save
+        log_table = {
+            'epoch': self.cur_epoch,
+            'iter': self.cur_iter,
+            'bestval': self.bestval,
+            'bestval_epoch': self.bestval_epoch,
+            'train_loss': self.train_loss,
+            'val_loss': self.val_loss,
+            'DBA': self.DBA,
+        }
+
+        # Save ckpt for every epoch
+        # Save the recent model/optimizer states
+        torch.save(image_projection_l1.state_dict(), os.path.join(args.logdir, 'final_image_projection_model.pth'))
+        torch.save(lidar_projection_l1.state_dict(), os.path.join(args.logdir, 'final_lidar_projection_model.pth'))
+        torch.save(radar_projection_l1.state_dict(), os.path.join(args.logdir, 'final_radar_projection_model.pth'))
+        torch.save(feat_trans_l1.state_dict(), os.path.join(args.logdir, 'final_feat_trans_model.pth'))
+        # # Log other data corresponding to the recent model
+        with open(os.path.join(args.logdir, 'recent.log'), 'w') as f:
+            f.write(json.dumps(log_table))
+
+        if save_best:  # save the bestpretrained model
+            torch.save(image_projection_l1.state_dict(), os.path.join(args.logdir, 'best_image_projection_model.pth'))
+            torch.save(lidar_projection_l1.state_dict(), os.path.join(args.logdir, 'best_lidar_projection_model.pth'))
+            torch.save(radar_projection_l1.state_dict(), os.path.join(args.logdir, 'best_radar_projection_model.pth'))
+            torch.save(optimizer.state_dict(), os.path.join(args.logdir, 'best_optim.pth'))
+            tqdm.write('====== Overwrote best model ======>')
+        elif args.load_previous_best:
+            image_projection_l1.load_state_dict(torch.load(os.path.join(args.logdir, 'best_image_projection_model.pth')))
+            lidar_projection_l1.load_state_dict(torch.load(os.path.join(args.logdir, 'best_lidar_projection_model.pth')))
+            radar_projection_l1.load_state_dict(torch.load(os.path.join(args.logdir, 'best_radar_projection_model.pth')))
+            optimizer.load_state_dict(torch.load(os.path.join(args.logdir, 'best_optim.pth')))
+            tqdm.write('====== Load the previous best model ======>')
 
 
 if __name__ == '__main__':
@@ -437,6 +618,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate.')
     parser.add_argument('--batch_size', type=int, default=2, help='Batch size')	# default=24
     parser.add_argument('--logdir', type=str, default='log', help='Directory to log data to.')	# /ibex/scratch/tiany0c/log
+    parser.add_argument('--finetune', type=int, default=0, help='train without validate and save')
     parser.add_argument('--add_velocity', type = int, default=1, help='concatenate velocity map with angle map')
     parser.add_argument('--add_mask', type=int, default=0, help='add mask to the camera data')
     parser.add_argument('--enhanced', type=int, default=1, help='use enhanced camera data')
@@ -525,6 +707,8 @@ if __name__ == '__main__':
 
     feat_trans_l1 = FeatureTrans(input_dim=128, hidden=128, out_dim=64).to(args.device)
 
+    fusion_model = TransFuser(config, args.device)
+
     image_encoder = torch.nn.DataParallel(image_encoder)
     lidar_encoder = torch.nn.DataParallel(lidar_encoder)
     radar_encoder = torch.nn.DataParallel(radar_encoder)
@@ -532,11 +716,12 @@ if __name__ == '__main__':
     lidar_proj_l1 = torch.nn.DataParallel(lidar_projection_l1)
     radar_proj_l1 = torch.nn.DataParallel(radar_projection_l1)
     feat_trans_l1 = torch.nn.DataParallel(feat_trans_l1)
+    fusion_model = torch.nn.DataParallel(fusion_model)
 
     criterion_contrast = ContrastiveLoss()
     criterion_contrast = criterion_contrast.to(args.device)
 
-    params = list(image_encoder.parameters()) + list(lidar_encoder.parameters()) + list(radar_encoder.parameters())
+    params = list(image_proj_l1.parameters()) + list(lidar_proj_l1.parameters()) + list(radar_proj_l1.parameters()) + list(feat_trans_l1.parameters())
     optimizer = optim.AdamW(params, lr=args.lr, weight_decay=1e-4)
     if args.scheduler:  # Cyclic Cosine Decay Learning Rate
         scheduler = CyclicCosineDecayLR(optimizer,
@@ -558,3 +743,6 @@ if __name__ == '__main__':
         for epoch in range(trainer.cur_epoch, args.epochs):
             print('epoch:', epoch)
             trainer.train()
+            if not args.finetune:
+                trainer.validate()
+                trainer.save()

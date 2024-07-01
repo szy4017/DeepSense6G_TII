@@ -688,7 +688,7 @@ class EncoderWithMamba(nn.Module):
             radar_missing = torch.zeros_like(radar).to(device)
             return [image, lidar, radar_missing]
 
-    def forward(self, image_list, lidar_list, radar_list, gps):
+    def forward(self, image_list, lidar_list, radar_list, gps, rebuild_modality_feat_list=None):
         '''
         Image + LiDAR feature fusion using transformers
         Args:
@@ -736,6 +736,16 @@ class EncoderWithMamba(nn.Module):
         radar_features = self.radar_encoder._model.layer1(radar_features)  # (bz*seq_len, 64, 64, 64)
 
         # fusion at (B, 64, 64, 64)
+        if rebuild_modality_feat_list is not None and self.missing is not None:
+            if self.missing == 'image':
+                image_features = rebuild_modality_feat_list[0]
+                image_features = image_features.view(bz * self.config.seq_len, 64, 64, 64)
+            elif self.missing == 'lidar':
+                lidar_features = rebuild_modality_feat_list[0]
+                lidar_features = lidar_features.view(bz * self.config.seq_len, 64, 64, 64)
+            elif self.missing == 'radar':
+                radar_features = rebuild_modality_feat_list[0]
+                radar_features = radar_features.view(bz * self.config.seq_len, 64, 64, 64)
         image_embd_layer1 = self.avgpool(image_features)
         lidar_embd_layer1 = self.avgpool(lidar_features)
         radar_embd_layer1 = self.avgpool(radar_features)
@@ -853,7 +863,7 @@ class TransFuser(nn.Module):
         # self.decoder = nn.GRUCell(input_size=2, hidden_size=64).to(self.device)
         # self.output = nn.Linear(64, 2).to(self.device)
         
-    def forward(self, image_list, lidar_list, radar_list, gps):
+    def forward(self, image_list, lidar_list, radar_list, gps, rebuild_modality_feat_list=None):
         '''
         Predicts waypoint from geometric feature projections of image + LiDAR input
         Args:
@@ -862,7 +872,7 @@ class TransFuser(nn.Module):
             target_point (tensor): goal location registered to ego-frame
             gps (tensor): input gps
         '''
-        fused_features = self.encoder(image_list, lidar_list, radar_list, gps)
+        fused_features = self.encoder(image_list, lidar_list, radar_list, gps, rebuild_modality_feat_list)
         z = self.join(fused_features)
 
        

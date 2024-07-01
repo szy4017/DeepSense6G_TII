@@ -133,6 +133,26 @@ loss_pred的误差太大，loss_trans没有得到有效训练
 ```
 python train_image_radar_lidar_rebuild.py -s image radar -t lidar --epochs 30 --batch_size 24 --lr 1e-3
 ```
+结果：loss几乎不下降，无法有效训练，loss_contrast=12.0；loss_trans=1.0；loss_distance=0.0
+
+### Solution (4)
+调整多个loss的权重，对于对比学习的loss_contrast，需要解决正负样本不均衡的问题，用batch_size=2试一试，进一步需要把label引入到对比损失计算中
+把源域改成lidar和radar，目标域改成image
+* batch_size: 2
+* alpha_contrast: 0.5
+* alpha_trans: 5.0
+* alpha_distance: 2.0
+* s: lidar radar, t: image
+```
+python train_image_radar_lidar_rebuild.py -s lidar radar -t image --batch_size 2 --epoch 30 --alpha_contrast 0.5 --alpha_trans 5.0 --alpha_distance 2.0
+```
+结果：batch_size=2可以帮助损失下降加快，loss_contrast=8.8->1.1，loss_trans=1.0->0.5，loss_diatance=0.0(可能是前期变化不大)
+
+### Solution (5)
+增加validate过程
+```
+python train_image_radar_lidar_rebuild.py -s lidar radar -t image --batch_size 2 --epoch 30 --alpha_contrast 0.5 --alpha_trans 5.0 --alpha_distance 2.0 --modality_missing image
+```
 
 ### Commands
 tensorboard --logdir log --host=10.15.198.46 --port=6008
