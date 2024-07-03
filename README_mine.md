@@ -155,9 +155,17 @@ python train_image_radar_lidar_rebuild.py -s lidar radar -t image --batch_size 2
 ```
 python train_image_radar_lidar_rebuild.py -s lidar radar -t image --batch_size 8 --epoch 30 --alpha_contrast 0.5 --alpha_trans 5.0 --alpha_distance 10.0 --modality_missing image
 ```
-结果：loss下降正常，DBA score可以达到0.79
+结果：loss下降正常，DBA score可以达到0.79，但是fintune之后的mambafusion在正常的no missing任务中又崩掉了
+
 Log on DBA score and loss
 ![log_lidar_missing](./Materials/log-finetune_mambafusion_lidar_radar2image.png)
+
+### Solution (6)
+调整mambafusion在finetune中的lr，采用rebuild数据和正常数据的混合训练，frozen掉编码器部分的参数
+* lr(mambafusion): 1e-4 -> 1e-6
+```
+python train_image_radar_lidar_rebuild.py -s lidar radar -t image --batch_size 8 --epoch 30 --alpha_contrast 0.05 --alpha_trans 5.0 --alpha_distance 2.0 --modality_missing image
+```
 
 ### Commands
 tensorboard --logdir log --host=10.15.198.46 --port=6008

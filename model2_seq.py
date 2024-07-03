@@ -1,6 +1,6 @@
 import math
 from collections import deque
-
+import random
 import numpy as np
 import torch 
 from torch import nn
@@ -714,7 +714,8 @@ class EncoderWithMamba(nn.Module):
                                                            h, w)  # (bz*seq_len, radar_c, h, w)
 
         # input tensor missing
-        image_tensor, lidar_tensor, radar_tensor = self.modality_missing([image_tensor, lidar_tensor, radar_tensor], self.missing)
+        if not self.training:
+            image_tensor, lidar_tensor, radar_tensor = self.modality_missing([image_tensor, lidar_tensor, radar_tensor], self.missing)
 
         image_features = self.image_encoder.features.conv1(image_tensor)
         image_features = self.image_encoder.features.bn1(image_features)
@@ -738,8 +739,14 @@ class EncoderWithMamba(nn.Module):
         # fusion at (B, 64, 64, 64)
         if rebuild_modality_feat_list is not None and self.missing is not None:
             if self.missing == 'image':
-                image_features = rebuild_modality_feat_list[0]
-                image_features = image_features.view(bz * self.config.seq_len, 64, 64, 64)
+                if self.training:
+                    image_features_rebuild = rebuild_modality_feat_list[0]
+                    image_features_rebuild = image_features_rebuild.view(bz * self.config.seq_len, 64, 64, 64)
+                    if random.choice([True, False]):
+                        image_features = image_features_rebuild
+                else:
+                    image_features = rebuild_modality_feat_list[0]
+                    image_features = image_features.view(bz * self.config.seq_len, 64, 64, 64)
             elif self.missing == 'lidar':
                 lidar_features = rebuild_modality_feat_list[0]
                 lidar_features = lidar_features.view(bz * self.config.seq_len, 64, 64, 64)
