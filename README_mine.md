@@ -129,7 +129,7 @@ CUDA_VISIBLE_DEVICES=3,4,5 python train_image_radar_lidar_rebuild.py -s image ra
 loss_pred的误差太大，loss_trans没有得到有效训练
 
 ### Solution (3)
-用mambafusion的frozen参数直接进行融合的预测，不用loss_pred，重点训练FeatureTrans模块。
+用mambafusion的frozen参数直接进行融合的预测，不用loss_pred，重点训练FeatureTrans模块
 ```
 python train_image_radar_lidar_rebuild.py -s image radar -t lidar --epochs 30 --batch_size 24 --lr 1e-3
 ```
@@ -146,13 +146,18 @@ python train_image_radar_lidar_rebuild.py -s image radar -t lidar --epochs 30 --
 ```
 python train_image_radar_lidar_rebuild.py -s lidar radar -t image --batch_size 2 --epoch 30 --alpha_contrast 0.5 --alpha_trans 5.0 --alpha_distance 2.0
 ```
-结果：batch_size=2可以帮助损失下降加快，loss_contrast=8.8->1.1，loss_trans=1.0->0.5，loss_diatance=0.0(可能是前期变化不大)
+结果：batch_size=2可以帮助损失下降加快，loss_contrast=8.8->1.1，loss_trans=1.0->0.5，loss_diatance=0.0(可能是前期变化不大)，
+在validate中，预测性能依旧很差，DBA_score=0.19，并且越训练性能还降低了
 
 ### Solution (5)
-增加validate过程
+将mambafusion的参数也加入训练，进行finetune，多了一个loss_fusion，并且屏蔽掉loss_contrast和loss_diatance，只用loss_fusion和loss_trans进行训练
+* loss_total = 5.0 \* loss_trans + loss_fusion
 ```
-python train_image_radar_lidar_rebuild.py -s lidar radar -t image --batch_size 2 --epoch 30 --alpha_contrast 0.5 --alpha_trans 5.0 --alpha_distance 2.0 --modality_missing image
+python train_image_radar_lidar_rebuild.py -s lidar radar -t image --batch_size 8 --epoch 30 --alpha_contrast 0.5 --alpha_trans 5.0 --alpha_distance 10.0 --modality_missing image
 ```
+结果：loss下降正常，DBA score可以达到0.79
+Log on DBA score and loss
+![log_lidar_missing](./Materials/log-finetune_mambafusion_lidar_radar2image.png)
 
 ### Commands
 tensorboard --logdir log --host=10.15.198.46 --port=6008

@@ -130,12 +130,12 @@ class ImageEncoder(nn.Module):
         normalize (bool): whether the input images should be normalized
     """
 
-    def __init__(self, c_dim=512, normalize=True, weight=True):
+    def __init__(self, c_dim=512, normalize=True, pretrain_weight=True):
         super().__init__()
         self.normalize = normalize
         self.features = models.resnet34(weights=True)
         self.features.fc = nn.Sequential()
-        if weight:
+        if pretrain_weight:
             self.load_pretrained_weight()
 
     def load_pretrained_weight(self):
@@ -165,14 +165,14 @@ class LidarEncoder(nn.Module):
         in_channels: input channels
     """
 
-    def __init__(self, num_classes=512, in_channels=1, weight=True):
+    def __init__(self, num_classes=512, in_channels=1, pretrain_weight=True):
         super().__init__()
         self._model = models.resnet18(weights=True)
         self._model.fc = nn.Sequential()
         _tmp = self._model.conv1
         self._model.conv1 = nn.Conv2d(in_channels, out_channels=_tmp.out_channels,
             kernel_size=_tmp.kernel_size, stride=_tmp.stride, padding=_tmp.padding, bias=_tmp.bias)
-        if weight:
+        if pretrain_weight:
             self.load_pretrained_weight()
 
     def load_pretrained_weight(self):
@@ -201,14 +201,14 @@ class RadarEncoder(nn.Module):
         in_channels: input channels
     """
 
-    def __init__(self, num_classes=512, in_channels=2, weight=True):
+    def __init__(self, num_classes=512, in_channels=2, pretrain_weight=True):
         super().__init__()
         self._model = models.resnet18(weights=True)
         self._model.fc = nn.Sequential()
         _tmp = self._model.conv1
         self._model.conv1 = nn.Conv2d(in_channels, out_channels=_tmp.out_channels,
             kernel_size=_tmp.kernel_size, stride=_tmp.stride, padding=_tmp.padding, bias=_tmp.bias)
-        if weight:
+        if pretrain_weight:
             self.load_pretrained_weight()
 
     def load_pretrained_weight(self):
@@ -228,19 +228,6 @@ class RadarEncoder(nn.Module):
         radar_feat_l1 = self._model.maxpool(radar_feat_l1)  # (bz*seq_len, 64, 64, 64)
         radar_feat_l1 = self._model.layer1(radar_feat_l1)
         return radar_feat_l1
-
-# class FusionEncoder(nn.Module):
-#     def __init__(self, input_dim=1536, out_dim=64, hidden=512):
-#         super().__init__()
-#         self.enc_net = nn.Sequential(
-#             nn.Linear(input_dim, hidden),
-#             nn.ReLU(),
-#             nn.Dropout(p=0.5),
-#             nn.Linear(hidden, out_dim)
-#         )
-#
-#     def forward(self, feat):
-#         return self.enc_net(feat)
 
 class ProjectHead(nn.Module):
     def __init__(self, input_dim=2816, hidden_dim=2048, out_dim=128):
@@ -265,9 +252,11 @@ class FeatureTrans(nn.Module):
         super().__init__()
         self.enc_net = nn.Sequential(
             nn.Conv1d(input_dim, hidden, kernel_size=1),
-            nn.ReLU(),
+            nn.BatchNorm1d(hidden),
+            nn.LeakyReLU(),
             nn.Conv1d(hidden, hidden, kernel_size=1),
-            nn.ReLU(),
+            nn.BatchNorm1d(hidden),
+            nn.LeakyReLU(),
             nn.Dropout(p=0.5),
             nn.Conv1d(hidden, out_dim, kernel_size=1)
         )
@@ -317,8 +306,7 @@ class Engine(object):
             images = []
             lidars = []
             radars = []
-            label = data['beam'][0]
-            label = label.to(args.device)
+            gps = data['gps'].to(args.device, dtype=torch.float32)
 
             for i in range(config.seq_len):
                 images.append(data['fronts'][i].to(args.device, dtype=torch.float32))
@@ -409,14 +397,22 @@ class Engine(object):
             loss_trans = F.mse_loss(s2t_feat, target_feat)
             # print(loss_trans)
 
+            # Fusion Prediction
+            s2t_feat = s2t_feat.view(bz, config.seq_len, 64, 64, 64)
+            pred_beams = fusion_model(images, lidars, radars, gps, [s2t_feat])
+            gt_beamidx = data['beamidx'][0].to(args.device, dtype=torch.long)
+            gt_beams = data['beam'][0].to(args.device, dtype=torch.float32)
+            loss_fusion = self.criterion(pred_beams, gt_beams)
+
             # loss backward
-            loss_total = args.alpha_trans*loss_trans + \
-                         args.alpha_contrast*loss_contrast + args.alpha_distance*loss_distance
+            # loss_total = args.alpha_trans*loss_trans + \
+            #              args.alpha_contrast*loss_contrast + args.alpha_distance*loss_distance
+            loss_total = args.alpha_trans*loss_trans + loss_fusion
             loss_total.backward()
             loss_epoch += float(loss_total.item())
             pbar.set_description(f'{loss_total.item():.2f}')
             pbar.set_postfix(t=f'{loss_trans.item():.3f}', c=f'{loss_contrast.item():.3f}',
-                             d=f'{loss_distance.item():.3f}')
+                             d=f'{loss_distance.item():.3f}', f=f'{loss_fusion.item():.3f}')
             num_batches += 1
             optimizer.step()
 
@@ -424,6 +420,7 @@ class Engine(object):
             writer.add_scalar('curr_iter_loss_trans', float(loss_trans.item()), self.cur_iter)
             writer.add_scalar('curr_iter_loss_contrast', float(loss_contrast.item()), self.cur_iter)
             writer.add_scalar('curr_iter_loss_distance', float(loss_distance.item()), self.cur_iter)
+            writer.add_scalar('curr_iter_loss_fusion', float(loss_fusion.item()), self.cur_iter)
 
             # if self.cur_iter > 100:
             #     break
@@ -588,6 +585,7 @@ class Engine(object):
         torch.save(lidar_projection_l1.state_dict(), os.path.join(args.logdir, 'final_lidar_projection_model.pth'))
         torch.save(radar_projection_l1.state_dict(), os.path.join(args.logdir, 'final_radar_projection_model.pth'))
         torch.save(feat_trans_l1.state_dict(), os.path.join(args.logdir, 'final_feat_trans_model.pth'))
+        torch.save(fusion_model.state_dict(), os.path.join(args.logdir, 'final_fusion_model.pth'))
         # # Log other data corresponding to the recent model
         with open(os.path.join(args.logdir, 'recent.log'), 'w') as f:
             f.write(json.dumps(log_table))
@@ -596,12 +594,16 @@ class Engine(object):
             torch.save(image_projection_l1.state_dict(), os.path.join(args.logdir, 'best_image_projection_model.pth'))
             torch.save(lidar_projection_l1.state_dict(), os.path.join(args.logdir, 'best_lidar_projection_model.pth'))
             torch.save(radar_projection_l1.state_dict(), os.path.join(args.logdir, 'best_radar_projection_model.pth'))
+            torch.save(feat_trans_l1.state_dict(), os.path.join(args.logdir, 'best_feat_trans_model.pth'))
+            torch.save(fusion_model.state_dict(), os.path.join(args.logdir, 'best_fusion_model.pth'))
             torch.save(optimizer.state_dict(), os.path.join(args.logdir, 'best_optim.pth'))
             tqdm.write('====== Overwrote best model ======>')
         elif args.load_previous_best:
             image_projection_l1.load_state_dict(torch.load(os.path.join(args.logdir, 'best_image_projection_model.pth')))
             lidar_projection_l1.load_state_dict(torch.load(os.path.join(args.logdir, 'best_lidar_projection_model.pth')))
             radar_projection_l1.load_state_dict(torch.load(os.path.join(args.logdir, 'best_radar_projection_model.pth')))
+            torch.save(feat_trans_l1.state_dict(), os.path.join(args.logdir, 'best_feat_trans_model.pth'))
+            torch.save(fusion_model.state_dict(), os.path.join(args.logdir, 'best_fusion_model.pth'))
             optimizer.load_state_dict(torch.load(os.path.join(args.logdir, 'best_optim.pth')))
             tqdm.write('====== Load the previous best model ======>')
 
@@ -634,13 +636,13 @@ if __name__ == '__main__':
     parser.add_argument('--temp_coef', type=int, default=1, help='apply temperature coefficience on the target')
     parser.add_argument('--Val', type=int, default=0, help='Val')
     parser.add_argument('--modality_missing', type=str, default=None, help='modality missing')
-    parser.add_argument('--load_model_path', type=str, default=None, help='load model param for valuating')
+    parser.add_argument('--load_model_dir', type=str, default=None, help='load model param for valuating')
     parser.add_argument('--temp', type=float, default=0.1, help='temp')
     parser.add_argument('--alpha_pred', type=float, default=0.5, help='alpha_pred')
     parser.add_argument('--alpha_trans', type=float, default=1.0, help='alpha_trans')
     parser.add_argument('--alpha_contrast', type=float, default=1.0, help='alpha_contrast')
     parser.add_argument('--alpha_distance', type=float, default=1.0, help='alpha_diatance')
-    parser.add_argument('--encoder_weight', type=bool, default=True, help='load the pretrained weight for encoder')
+    parser.add_argument('--pretrain_weight', type=bool, default=True, help='load the pretrained weight for encoder and fusion model')
 
     args = parser.parse_args()
     if args.logdir == 'log':
@@ -651,8 +653,6 @@ if __name__ == '__main__':
         args.logdir = args.logdir + '_' + tag
     if args.Val:
         args.logdir = args.logdir + '_val'
-    if args.modality_missing is not None:
-        args.logdir = args.logdir + '_' + args.modality_missing
 
     writer = SummaryWriter(log_dir=args.logdir)
 
@@ -699,31 +699,38 @@ if __name__ == '__main__':
     dataloader_val = DataLoader(val_set, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=False)
 
     # Modal
-    image_encoder = ImageEncoder(weight=args.encoder_weight).to(args.device)
-    lidar_encoder = LidarEncoder(weight=args.encoder_weight).to(args.device)
-    radar_encoder = RadarEncoder(weight=args.encoder_weight).to(args.device)
-
+    image_encoder = ImageEncoder(pretrain_weight=args.pretrain_weight).to(args.device)
+    lidar_encoder = LidarEncoder(pretrain_weight=args.pretrain_weight).to(args.device)
+    radar_encoder = RadarEncoder(pretrain_weight=args.pretrain_weight).to(args.device)
+    fusion_model = TransFuser(config, args.device, pretrain_weight=args.pretrain_weight)
     image_projection_l1 = ProjectHead(input_dim=64, hidden_dim=64, out_dim=128).to(args.device)
     lidar_projection_l1 = ProjectHead(input_dim=64, hidden_dim=64, out_dim=128).to(args.device)
     radar_projection_l1 = ProjectHead(input_dim=64, hidden_dim=64, out_dim=128).to(args.device)
-
     feat_trans_l1 = FeatureTrans(input_dim=128, hidden=128, out_dim=64).to(args.device)
-
-    fusion_model = TransFuser(config, args.device)
 
     image_encoder = torch.nn.DataParallel(image_encoder)
     lidar_encoder = torch.nn.DataParallel(lidar_encoder)
     radar_encoder = torch.nn.DataParallel(radar_encoder)
-    image_proj_l1 = torch.nn.DataParallel(image_projection_l1)
-    lidar_proj_l1 = torch.nn.DataParallel(lidar_projection_l1)
-    radar_proj_l1 = torch.nn.DataParallel(radar_projection_l1)
+    image_projection_l1 = torch.nn.DataParallel(image_projection_l1)
+    lidar_projection_l1 = torch.nn.DataParallel(lidar_projection_l1)
+    radar_projection_l1 = torch.nn.DataParallel(radar_projection_l1)
     feat_trans_l1 = torch.nn.DataParallel(feat_trans_l1)
     fusion_model = torch.nn.DataParallel(fusion_model)
+
+    # Model loading
+    if args.Val and args.load_model_dir is not None:
+        image_projection_l1.load_state_dict(torch.load(os.path.join(args.load_model_dir, 'best_image_projection_model.pth')))
+        lidar_projection_l1.load_state_dict(torch.load(os.path.join(args.load_model_dir, 'best_lidar_projection_model.pth')))
+        radar_projection_l1.load_state_dict(torch.load(os.path.join(args.load_model_dir, 'best_radar_projection_model.pth')))
+        feat_trans_l1.load_state_dict(torch.load(os.path.join(args.load_model_dir, 'final_feat_trans_model.pth')))
+        fusion_model.load_state_dict(torch.load('mambafusion.pth'))
+        print('======loading model path from {}'.format(args.load_model_dir))
 
     criterion_contrast = ContrastiveLoss()
     criterion_contrast = criterion_contrast.to(args.device)
 
-    params = list(image_proj_l1.parameters()) + list(lidar_proj_l1.parameters()) + list(radar_proj_l1.parameters()) + list(feat_trans_l1.parameters())
+    params = list(image_projection_l1.parameters()) + list(lidar_projection_l1.parameters()) + list(radar_projection_l1.parameters()) + \
+             list(feat_trans_l1.parameters()) + list(fusion_model.parameters())
     optimizer = optim.AdamW(params, lr=args.lr, weight_decay=1e-4)
     if args.scheduler:  # Cyclic Cosine Decay Learning Rate
         scheduler = CyclicCosineDecayLR(optimizer,

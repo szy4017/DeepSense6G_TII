@@ -845,7 +845,7 @@ class TransFuser(nn.Module):
     Transformer-based feature fusion followed by GRU-based waypoint prediction network and PID controller
     '''
 
-    def __init__(self, config, device):
+    def __init__(self, config, device, pretrain_weight=False):
         super().__init__()
         self.device = device
         self.config = config
@@ -862,6 +862,13 @@ class TransFuser(nn.Module):
                         ).to(self.device)
         # self.decoder = nn.GRUCell(input_size=2, hidden_size=64).to(self.device)
         # self.output = nn.Linear(64, 2).to(self.device)
+        if pretrain_weight:
+            self.load_pretrained_weight()
+
+    def load_pretrained_weight(self):
+        model_dict = torch.load('mamba_fusion.pth')
+        self.load_state_dict(model_dict)
+        print('Pretrained weights loaded from mamba_fusion.pth')
         
     def forward(self, image_list, lidar_list, radar_list, gps, rebuild_modality_feat_list=None):
         '''
