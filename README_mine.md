@@ -167,7 +167,56 @@ Log on DBA score and loss
 python train_image_radar_lidar_rebuild.py -s lidar radar -t image --batch_size 8 --epoch 30 --alpha_contrast 0.05 --alpha_trans 5.0 --alpha_distance 2.0 --modality_missing image
 ```
 
+# Experiments
+
+## Table I
+MambaFusion vs other method, DBA score
+
+| Method    | Modality | Parameter | Overall | Scenario 31 | Scenario 32 | Scenario 33 | Scenario 34 |
+|-----------|----------|-----------|---------|-------------|-------------|-------------|-------------|
+| baseline1 |          |           |         |             |             |             |             |
+| baseline2 |          |           |         |             |             |             |             |
+| ...       |          |           |         |             |             |             |             |
+| ours      |          |           |         |             |             |             |             |
+
+## Table II
+Ablation study in MambaFusion module (FFM TFM), DBA score, training GPU memory, training GPU hours, inference speed
+
+| FFM  | TFM | DBA score | GPU memory | GPU hours | FPS |
+|------|-----|-----------|------------|-----------|-----|
+|      |     |           |            |           |     |
+| ✅    |     |           |            |           |     |
+|      | ✅    |           |            |           |     |
+| ✅     | ✅    |           |            |           |     |
+
+* FFM: Feature Fusion Mamba
+* TFM: Time Fusion Mamba
+
+## Table III
+Performance in modality missing
+
+| Method     | Image missing | lidar missing | radar missing | lidar & radar missing |
+|------------|---------------|---------------|---------------|-----------------------|
+| baseline   |               |               |               |                       |
+| ours       |               |               |               |                       |
+| ours + MRM |               |               |               |                       |
+
+* MRM: Modality Rebuilding Module
+
+## Table IV
+Ablation study in modality rebuilding
+
+| loss_fusion | loss_trans | loss_contrast | loss_distance | L,R->I | I,R->L | I,L->R | I->L,R |
+|-------------|------------|---------------|---------------|--------|--------|--------|--------|
+|             |            |               |               |        |        |        |        |
+| ✅           |            |               |               |        |        |        |        |
+| ✅           | ✅           |               |               |        |        |        |        |
+| ✅           | ✅           | ✅              |               |        |        |        |        |
+| ✅           | ✅           | ✅              | ✅              |        |        |        |        |
+
 ### Commands
+```
 tensorboard --logdir log --host=10.15.198.46 --port=6008
 python train2_seq.py --epochs 30 --batch_size 24 --logdir 'log/20240619_165326'
+```
 
