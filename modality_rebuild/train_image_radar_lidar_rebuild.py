@@ -711,12 +711,12 @@ if __name__ == '__main__':
     radar_projection_l1 = ProjectHead(input_dim=64, hidden_dim=64, out_dim=128).to(args.device)
     feat_trans_l1 = FeatureTrans(input_dim=128, hidden=128, out_dim=64).to(args.device)
 
-    for param in fusion_model.encoder.image_encoder.parameters():
-        param.requires_grad = False
-    for param in fusion_model.encoder.lidar_encoder.parameters():
-        param.requires_grad = False
-    for param in fusion_model.encoder.radar_encoder.parameters():
-        param.requires_grad = False
+    # for param in fusion_model.encoder.image_encoder.parameters():
+    #     param.requires_grad = False
+    # for param in fusion_model.encoder.lidar_encoder.parameters():
+    #     param.requires_grad = False
+    # for param in fusion_model.encoder.radar_encoder.parameters():
+    #     param.requires_grad = False
 
     image_encoder = torch.nn.DataParallel(image_encoder)
     lidar_encoder = torch.nn.DataParallel(lidar_encoder)
@@ -744,8 +744,15 @@ if __name__ == '__main__':
         {'params': lidar_projection_l1.parameters(), 'lr': args.lr},
         {'params': radar_projection_l1.parameters(), 'lr': args.lr},
         {'params': feat_trans_l1.parameters(), 'lr': args.lr},
-        {'params': filter(lambda p: p.requires_grad, fusion_model.parameters()), 'lr': 1e-6},
+        {'params': fusion_model.parameters(), 'lr': 1e-6},
     ]
+    # params = [
+    #     {'params': image_projection_l1.parameters(), 'lr': args.lr},
+    #     {'params': lidar_projection_l1.parameters(), 'lr': args.lr},
+    #     {'params': radar_projection_l1.parameters(), 'lr': args.lr},
+    #     {'params': feat_trans_l1.parameters(), 'lr': args.lr},
+    #     {'params': filter(lambda p: p.requires_grad, fusion_model.parameters()), 'lr': 1e-6},
+    # ]
     # params = list(image_projection_l1.parameters()) + list(lidar_projection_l1.parameters()) + list(radar_projection_l1.parameters()) + \
     #          list(feat_trans_l1.parameters()) + list(fusion_model.parameters())
     optimizer = optim.AdamW(params, lr=args.lr, weight_decay=1e-4)

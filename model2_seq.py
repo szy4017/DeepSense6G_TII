@@ -742,7 +742,7 @@ class EncoderWithMamba(nn.Module):
                 if self.training:
                     image_features_rebuild = rebuild_modality_feat_list[0]
                     image_features_rebuild = image_features_rebuild.view(bz * self.config.seq_len, 64, 64, 64)
-                    if random.choice([True, False]):
+                    if random.choice([True, False, False, False]):
                         image_features = image_features_rebuild
                 else:
                     image_features = rebuild_modality_feat_list[0]
