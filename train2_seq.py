@@ -17,7 +17,7 @@ torch.backends.cudnn.benchmark = True
 from scheduler import CyclicCosineDecayLR
 
 from config_seq import GlobalConfig
-from model2_seq import TransFuser
+from mambafuser_seq import MambaFuser
 from data2_seq import CARLA_Data
 
 import torchvision
@@ -31,11 +31,13 @@ parser = argparse.ArgumentParser()
 time_id = datetime.now().strftime("%Y%m%d_%H%M%S")
 parser.add_argument('--id', type=str, default=time_id, help='Unique experiment identifier.')
 parser.add_argument('--device', type=str, default='cuda', help='Device to use')
-parser.add_argument('--epochs', type=int, default=150, help='Number of train epochs.')
-parser.add_argument('--lr', type=float, default=5e-4, help='Learning rate.')
+parser.add_argument('--epochs', type=int, default=50, help='Number of train epochs.')
+parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate.')
 parser.add_argument('--batch_size', type=int, default=2, help='Batch size')	# default=24
 parser.add_argument('--logdir', type=str, default='log', help='Directory to log data to.')	# /ibex/scratch/tiany0c/log
-parser.add_argument('--add_velocity', type = int, default=1, help='concatenate velocity map with angle map')
+parser.add_argument('--add_velocity', type=int, default=1, help='concatenate velocity map with angle map')
+parser.add_argument('--FFM', type=int, default=1, help='Feature Fusion Mamba')
+parser.add_argument('--TFM', type=int, default=1, help='Time Fusion Mamba')
 parser.add_argument('--add_mask', type=int, default=0, help='add mask to the camera data')
 parser.add_argument('--enhanced', type=int, default=1, help='use enhanced camera data')
 parser.add_argument('--filtered', type=int, default=0, help='use filtered lidar data')
@@ -416,6 +418,8 @@ config.custom_FoV_lidar=args.custom_FoV_lidar
 config.filtered = args.filtered
 config.add_seg = args.add_seg
 config.modality_missing = args.modality_missing
+config.FFM = args.FFM
+config.TFM = args.TFM
 data_root = config.data_root	# path to the dataset
 
 import random
@@ -527,7 +531,7 @@ else:
 
 
 # Model
-model = TransFuser(config, args.device)
+model = MambaFuser(config, args.device)
 model = torch.nn.DataParallel(model)
 optimizer = optim.AdamW(model.parameters(), lr=args.lr)
 if args.scheduler:#Cyclic Cosine Decay Learning Rate

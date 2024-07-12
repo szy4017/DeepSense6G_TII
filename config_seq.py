@@ -17,6 +17,10 @@ class GlobalConfig:
 
     lr = 1e-4 # learning rate
 
+    # Mamba set
+    FFM = 1
+    TFM = 1
+
     # Modality missing set
     modality_missing = None
 

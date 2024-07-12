@@ -179,6 +179,10 @@ MambaFusion vs other method, DBA score
 | ...       |          |           |         |             |             |             |             |
 | ours      |          |           |         |             |             |             |             |
 
+```
+python train2_seq.py --logdir experiments/FFM_TFM_base --batch_size 24
+```
+
 ## Table II
 Ablation study in MambaFusion module (FFM TFM), DBA score, training GPU memory, training GPU hours, inference speed
 
@@ -217,6 +221,7 @@ Ablation study in modality rebuilding
 ### Commands
 ```
 tensorboard --logdir log --host=10.15.198.46 --port=6008
+tensorboard --logdir experiments --host=10.15.198.46 --port=6008
 python train2_seq.py --epochs 30 --batch_size 24 --logdir 'log/20240619_165326'
 ```
 
