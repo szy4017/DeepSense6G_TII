@@ -197,9 +197,16 @@ class MambaFusion(nn.Module):
         lidar_tensor = lidar_tensor.view(bz, self.seq_len, -1, h, w)
         radar_tensor = radar_tensor.view(bz, self.seq_len, -1, h, w)
 
+        # channel swapping for image_tensor, lidar tensor and radar tensor
+        s1 = self.n_embd // 3
+        s2 = self.n_embd // 3 * 2
+        cs_image_tensor = torch.cat((image_tensor[:, :, :s1, ...], lidar_tensor[:, :, s1:s2, ...], radar_tensor[:, :, s2:, ...]), dim=2)
+        cs_lidar_tensor = torch.cat((lidar_tensor[:, :, :s1, ...], radar_tensor[:, :, s1:s2, ...], image_tensor[:, :, s2:, ...]), dim=2)
+        cs_radar_tensor = torch.cat((radar_tensor[:, :, :s1, ...], image_tensor[:, :, s1:s2, ...], lidar_tensor[:, :, s2:, ...]), dim=2)
+
         # pad token embeddings along number of tokens dimension
-        token_embeddings = torch.cat([image_tensor, lidar_tensor, radar_tensor], dim=1).permute(0, 1, 3, 4,
-                                                                                                2).contiguous()
+        token_embeddings = torch.cat(
+            [cs_image_tensor, cs_lidar_tensor, cs_radar_tensor], dim=1).permute(0, 1, 3, 4, 2).contiguous()
         # print(token_embeddings.shape)
         token_embeddings = token_embeddings.view(bz, -1, self.n_embd)  # (B, an * T, C)
         token_embeddings = torch.cat([token_embeddings, gps], dim=1)
@@ -222,6 +229,59 @@ class MambaFusion(nn.Module):
         radar_tensor_out = x[:, (self.config.n_views + 1) * self.seq_len:, :, :, :].contiguous().view(bz * self.seq_len,
                                                                                                       -1, h, w)
         return image_tensor_out, lidar_tensor_out, radar_tensor_out, pos_tensor_out
+
+class TimeMamba(nn.Module):
+    def __init__(self, d_model=512, d_state=16, d_conv=4, expand=2):
+        super().__init__()
+        self.d_model = d_model
+        self.d_state = d_state
+        self.d_conv = d_conv
+        self.expand = expand
+        self.mamba = Mamba(d_model=d_model, d_state=d_state, d_conv=d_conv, expand=expand)
+        self.maxpool = nn.MaxPool1d(kernel_size=512)
+        self.avgpool = nn.AvgPool1d(kernel_size=512)
+        self.mlp = nn.Sequential(
+            nn.Linear(5, 5),
+            nn.Softmax(dim=-1),
+        )
+        self.mlp_gps = nn.Sequential(
+            nn.Linear(2, 2),
+            nn.Softmax(dim=-1),
+        )
+
+    def forward(self, image_features, lidar_features, radar_features, gps_features):
+        """
+        image_features (tensor): (bz, seq_len, 512)
+        lidar_features (tensor): (bz, seq_len, 512)
+        radar_features (tensor): (bz, seq_len, 512)
+        gps_features (tensor): (bz, 2, 512)
+
+        return: fused_features (tensor): (bz, 512)
+        """
+        image_features = self.mamba(image_features)
+        lidar_features = self.mamba(lidar_features)
+        radar_features = self.mamba(radar_features)
+
+        image_atten = self.maxpool(image_features) + self.avgpool(image_features)
+        image_atten = self.mlp(image_atten.squeeze(-1)).unsqueeze(-1).expand(-1, -1, 512)
+        image_feat = (image_features * image_atten).sum(dim=1, keepdim=True)
+
+        lidar_atten = self.maxpool(lidar_features) + self.avgpool(lidar_features)
+        lidar_atten = self.mlp(lidar_atten.squeeze(-1)).unsqueeze(-1).expand(-1, -1, 512)
+        lidar_feat = (lidar_features * lidar_atten).sum(dim=1, keepdim=True)
+
+        radar_atten = self.maxpool(radar_features) + self.avgpool(radar_features)
+        radar_atten = self.mlp(radar_atten.squeeze(-1)).unsqueeze(-1).expand(-1, -1, 512)
+        radar_feat = (radar_features * radar_atten).sum(dim=1, keepdim=True)
+
+        gps_atten = self.maxpool(gps_features) + self.avgpool(gps_features)
+        gps_atten = self.mlp_gps(gps_atten.squeeze(-1)).unsqueeze(-1).expand(-1, -1, 512)
+        gps_feat = (gps_features * gps_atten).sum(dim=1, keepdim=True)
+
+        fused_features = torch.cat([image_feat, lidar_feat, radar_feat, gps_feat], dim=1)
+        fused_features = torch.sum(fused_features, dim=1)
+
+        return fused_features
 
 class EncoderWithMamba(nn.Module):
     """
@@ -291,11 +351,11 @@ class EncoderWithMamba(nn.Module):
                                         seq_len=config.seq_len,
                                         embd_pdrop=config.embd_pdrop,
                                         config=config)
-        # TODO: update time_mamba
-        self.time_mamba = Mamba(d_model=512,
-                                d_state=16,
-                                d_conv=4,
-                                expand=2)
+
+        self.time_mamba = TimeMamba(d_model=512,
+                                    d_state=16,
+                                    d_conv=4,
+                                    expand=2)
 
     def modality_missing(self, input_tensor, miss):
         image, lidar, radar = input_tensor
@@ -341,7 +401,7 @@ class EncoderWithMamba(nn.Module):
                                                            h, w)  # (bz*seq_len, radar_c, h, w)
 
         # input tensor missing
-        if not self.training and self.missing is not None:
+        if self.missing is not None:
             image_tensor, lidar_tensor, radar_tensor = self.modality_missing([image_tensor, lidar_tensor, radar_tensor], self.missing)
 
         image_features = self.image_encoder.features.conv1(image_tensor)
@@ -462,15 +522,15 @@ class EncoderWithMamba(nn.Module):
 
         # time fusion with mamba
         if self.config.TFM:
-            image_features = self.time_mamba(image_features)    # (bz, seq_len, 512)
-            lidar_features = self.time_mamba(lidar_features)    # (bz, seq_len, 512)
-            radar_features = self.time_mamba(radar_features)    # (bz, seq_len, 512)
+            # multi-modal feature shape: (bz, seq_len, 512)
+            fused_features = self.time_mamba(image_features, lidar_features, radar_features, gps_features)  # (bz, 512)
+            return fused_features
 
         fused_features = torch.cat([image_features, lidar_features, radar_features, gps_features],
-                                   dim=1)  # (1, 17, 512)
+                                   dim=1)  # (bz, 17, 512)
         # fused_features = torch.cat([image_features, lidar_features, radar_features], dim=1)
 
-        fused_features = torch.sum(fused_features, dim=1)  # (1, 512)
+        fused_features = torch.sum(fused_features, dim=1)  # (bz, 512)
 
         return fused_features
 

@@ -181,6 +181,13 @@ MambaFusion vs other method, DBA score
 
 ```
 python train2_seq.py --logdir experiments/FFM_TFM_base --batch_size 24
+python train2_seq.py --logdir experiments/FFM-csbimamba_TFM-attenmamba_base --batch_size 24
+python train2_seq.py --logdir experiments/FFM-csbimamba_TFM-attenmamba_img_lidar --batch_size 24 --modality_missing radar
+python train2_seq.py --logdir experiments/FFM-csbimamba_TFM-attenmamba_img_radar --batch_size 24 --modality_missing lidar
+
+# TODO
+python train2_seq.py --logdir experiments/FFM-csbimamba_TFM-attenmamba_lidar_radar --batch_size 24 --modality_missing image
+python train2_seq.py --logdir experiments/FFM-csbimamba_TFM-attenmamba_image --batch_size 24 --modality_missing lidar_radar
 ```
 
 ## Table II
@@ -195,6 +202,12 @@ Ablation study in MambaFusion module (FFM TFM), DBA score, training GPU memory, 
 
 * FFM: Feature Fusion Mamba
 * TFM: Time Fusion Mamba
+* baseline: Transformer_TII -> TODO
+* Line 3: Transformer_TII + TFM -> TODO
+
+```
+python train2_seq.py --logdir experiments/FFM-csbimamba_ablation --TFM 0 --batch_size 24
+```
 
 ## Table III
 Performance in modality missing
@@ -206,6 +219,10 @@ Performance in modality missing
 | ours + MRM |               |               |               |                       |
 
 * MRM: Modality Rebuilding Module
+
+```
+
+```
 
 ## Table IV
 Ablation study in modality rebuilding
