@@ -202,7 +202,7 @@ Ablation study in MambaFusion module (FFM TFM), DBA score, training GPU memory, 
 
 * FFM: Feature Fusion Mamba
 * TFM: Time Fusion Mamba
-* baseline: Transformer_TII -> TODO
+* baseline: Transfuser_TII -> TODO
 * Line 3: Transformer_TII + TFM -> TODO
 
 ```
@@ -218,10 +218,19 @@ Performance in modality missing
 | ours       |               |               |               |                       |
 | ours + MRM |               |               |               |                       |
 
+* baseline: Transfuser_TII -> TODO
 * MRM: Modality Rebuilding Module
 
 ```
-
+# TODO
+python train2_seq.py --logdir experiments/mambafuser_image_missing --Val 1 --batch_size 24 --modality_missing image --load_model_path experiments/FFM-csbimamba_TFM-attenmamba_base/best_model.pth 
+python train2_seq.py --logdir experiments/mambafuser_lidar_missing --Val 1 --batch_size 24 --modality_missing lidar --load_model_path experiments/FFM-csbimamba_TFM-attenmamba_base/best_model.pth 
+python train2_seq.py --logdir experiments/mambafuser_radar_missing --Val 1 --batch_size 24 --modality_missing radar --load_model_path experiments/FFM-csbimamba_TFM-attenmamba_base/best_model.pth 
+python train2_seq.py --logdir experiments/mambafuser_lidar_radar_missing --Val 1 --batch_size 24 --modality_missing lidar_radar --load_model_path experiments/FFM-csbimamba_TFM-attenmamba_base/best_model.pth 
+python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_image_missing --batch_size 24 -s lidar radar -t image --modality_missing image
+python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_lidar_missing --batch_size 24 -s image radar -t lidar --modality_missing lidar
+python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_radar_missing --batch_size 24 -s image lidar -t radar --modality_missing radar
+python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_lidar_radar_missing --batch_size 24 -s image -t lidar radar --modality_missing lidar_radar
 ```
 
 ## Table IV
@@ -234,6 +243,22 @@ Ablation study in modality rebuilding
 | ✅           | ✅           |               |               |        |        |        |        |
 | ✅           | ✅           | ✅              |               |        |        |        |        |
 | ✅           | ✅           | ✅              | ✅              |        |        |        |        |
+
+```
+# TODO
+python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_fusion_image_missing --batch_size 24 -s lidar radar -t image --modality_missing image --alpha_trans 0 --alpha_contrast 0 --alpha_distance 0
+python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_fusion_trans_image_missing --batch_size 24 -s lidar radar -t image --modality_missing image --alpha_contrast 0 --alpha_distance 0
+python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_fusion_trans_constrast_image_missing --batch_size 24 -s lidar radar -t image --modality_missing image --alpha_distance 0
+python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_fusion_lidar_missing --batch_size 24 -s image radar -t lidar --modality_missing lidar --alpha_trans 0 --alpha_contrast 0 --alpha_distance 0
+python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_fusion_trans_lidar_missing --batch_size 24 -s image radar -t lidar --modality_missing lidar --alpha_contrast 0 --alpha_distance 0
+python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_fusion_trans_constrast_lidar_missing --batch_size 24 -s image radar -t lidar --modality_missing lidar --alpha_distance 0
+python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_fusion_radar_missing --batch_size 24 -s image lidar -t radar --modality_missing radar --alpha_trans 0 --alpha_contrast 0 --alpha_distance 0
+python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_fusion_trans_radar_missing --batch_size 24 -s image lidar -t radar --modality_missing radar --alpha_contrast 0 --alpha_distance 0
+python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_fusion_trans_constrast_radar_missing --batch_size 24 -s image lidar -t radar --modality_missing radar --alpha_distance 0
+python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_fusion_lidar_radar_missing --batch_size 24 -s image -t lidar radar --modality_missing lidar_radar --alpha_trans 0 --alpha_contrast 0 --alpha_distance 0
+python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_fusion_trans_lidar_radar_missing --batch_size 24 -s image -t lidar radar --modality_missing lidar_radar --alpha_contrast 0 --alpha_distance 0
+python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_fusion_trans_constrast_lidar_radar_missing --batch_size 24 -s image -t lidar radar --modality_missing lidar_radar --alpha_distance 0
+```
 
 ### Commands
 ```
