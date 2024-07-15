@@ -561,7 +561,7 @@ class MambaFuser(nn.Module):
             self.load_pretrained_weight()
 
     def load_pretrained_weight(self):
-        model_dict = torch.load('mamba_fusion.pth')
+        model_dict = torch.load('fusion_model.pth')
         self.load_state_dict(model_dict)
         print('Pretrained weights loaded from mamba_fusion.pth')
         
