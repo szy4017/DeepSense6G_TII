@@ -301,6 +301,7 @@ class EncoderWithMamba(nn.Module):
         else:
             self.radar_encoder = LidarEncoder(num_classes=512, in_channels=1)
         self.missing = self.config.modality_missing
+        self.missing_type = self.config.modality_missing_type
 
         self.vel_emb1 = nn.Linear(2, 64)
         self.vel_emb2 = nn.Linear(64, 128)
@@ -362,21 +363,31 @@ class EncoderWithMamba(nn.Module):
         device = image.device
         if miss == None:
             return [image, lidar, radar]
-            # lidar_missing = torch.zeros_like(lidar).to(device)
-            # radar_missing = torch.zeros_like(radar).to(device)
-            # return [image, lidar_missing, radar_missing]
         elif miss == 'image':
-            image_missing = torch.zeros_like(image).to(device)
+            if self.missing_type == 'zerolike':
+                image_missing = torch.zeros_like(image).to(device)
+            elif self.missing_type == 'randlike':
+                image_missing = torch.rand_like(image).to(device)
             return [image_missing, lidar, radar]
         elif miss == 'lidar':
-            lidar_missing = torch.zeros_like(lidar).to(device)
+            if self.missing_type == 'zerolike':
+                lidar_missing = torch.zeros_like(lidar).to(device)
+            if self.missing_type == 'randlike':
+                lidar_missing = torch.rand_like(lidar).to(device)
             return [image, lidar_missing, radar]
         elif miss == 'radar':
-            radar_missing = torch.zeros_like(radar).to(device)
+            if self.missing_type == 'zerolike':
+                radar_missing = torch.zeros_like(radar).to(device)
+            elif self.missing_type == 'randlike':
+                radar_missing = torch.rand_like(radar).to(device)
             return [image, lidar, radar_missing]
         elif miss == 'lidar_radar' or miss == 'radar_lidar':
-            lidar_missing = torch.zeros_like(lidar).to(device)
-            radar_missing = torch.zeros_like(radar).to(device)
+            if self.missing_type == 'zerolike':
+                lidar_missing = torch.zeros_like(lidar).to(device)
+                radar_missing = torch.zeros_like(radar).to(device)
+            elif self.missing_type == 'randlike':
+                lidar_missing = torch.rand_like(lidar).to(device)
+                radar_missing = torch.rand_like(radar).to(device)
             return [image, lidar_missing, radar_missing]
 
     def forward(self, image_list, lidar_list, radar_list, gps, rebuild_modality_feat_list=None):

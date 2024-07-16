@@ -23,6 +23,7 @@ class GlobalConfig:
 
     # Modality missing set
     modality_missing = None
+    modality_missing_type = 'zerolike'
 
     # Conv Encoder
     vert_anchors = 8

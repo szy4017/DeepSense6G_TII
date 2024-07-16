@@ -648,7 +648,8 @@ if __name__ == '__main__':
     parser.add_argument('--load_previous_best', type=int, default=0, help='load previous best pretrained model ')
     parser.add_argument('--temp_coef', type=int, default=1, help='apply temperature coefficience on the target')
     parser.add_argument('--Val', type=int, default=0, help='Val')
-    parser.add_argument('--modality_missing', type=str, default=None, help='modality missing')
+    parser.add_argument('--modality_missing', type=str, default=None, help='modality missing: image, lidar, radar, lidar_radar')
+    parser.add_argument('--modality_missing_type', type=str, default='zerolike', help='modality missing type: zerolike, randlike')
     parser.add_argument('--load_model_dir', type=str, default=None, help='load model param for valuating')
     parser.add_argument('--temp', type=float, default=0.1, help='temp')
     parser.add_argument('--alpha_trans', type=float, default=1.0, help='alpha_trans')
@@ -660,10 +661,12 @@ if __name__ == '__main__':
     args = parser.parse_args()
     if args.logdir == 'log':
         args.logdir = os.path.join(args.logdir, args.id)
+    if args.logdir != 'log':
         source = '_'.join(args.source_domain)
         target = '_'.join(args.target_domain)
         tag = source + '2' + target
-        args.logdir = args.logdir + '_' + tag
+        args.logdir = args.logdir + '-' + tag
+        args.logdir = args.logdir + '-' + args.modality_missing_type
     if args.Val:
         args.logdir = args.logdir + '_val'
 
@@ -679,6 +682,7 @@ if __name__ == '__main__':
     config.custom_FoV_lidar = args.custom_FoV_lidar
     config.add_seg = args.add_seg
     config.modality_missing = args.modality_missing
+    config.modality_missing_type = args.modality_missing_type
     config.data_root = args.data_root
     data_root = config.data_root  # path to the dataset
 

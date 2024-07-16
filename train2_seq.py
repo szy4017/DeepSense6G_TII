@@ -49,7 +49,8 @@ parser.add_argument('--train_adapt_together', type=int, default=1, help='combine
 parser.add_argument('--finetune', type=int, default=0, help='first train on development set and finetune on 31-34 set')
 parser.add_argument('--Val', type=int, default=0, help='Val')
 parser.add_argument('--Test', type=int, default=0, help='Test')
-parser.add_argument('--modality_missing', type=str, default=None, help='modality missing')
+parser.add_argument('--modality_missing', type=str, default=None, help='modality missing: image, lidar, radar, lidar_radar')
+parser.add_argument('--modality_missing_type', type=str, default='zerolike', help='modality missing type: zerolike, randlike')
 parser.add_argument('--load_model_path', type=str, default=None, help='load model param for valuating')
 parser.add_argument('--augmentation', type=int, default=1, help='data augmentation of camera and lidar')
 parser.add_argument('--angle_norm', type=int, default=1, help='normlize the gps loc with unit, angle can be obtained')
@@ -60,10 +61,11 @@ parser.add_argument('--flip', type=int, default=0, help='flip all the data to au
 args = parser.parse_args()
 if args.logdir == 'log':
 	args.logdir = os.path.join(args.logdir, args.id)
-if args.Val:
-	args.logdir = args.logdir + '_val'
 if args.modality_missing is not None:
 	args.logdir = args.logdir + '-ms_' + args.modality_missing
+	args.logdir = args.logdir + '-' + args.modality_missing_type
+if args.Val:
+	args.logdir = args.logdir + '_val'
 
 writer = SummaryWriter(log_dir=args.logdir)
 class Engine(object):
@@ -418,6 +420,7 @@ config.custom_FoV_lidar=args.custom_FoV_lidar
 config.filtered = args.filtered
 config.add_seg = args.add_seg
 config.modality_missing = args.modality_missing
+config.modality_missing_type = args.modality_missing_type
 config.FFM = args.FFM
 config.TFM = args.TFM
 data_root = config.data_root	# path to the dataset
