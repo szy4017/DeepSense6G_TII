@@ -222,15 +222,20 @@ Performance in modality missing
 * MRM: Modality Rebuilding Module
 
 ```
-# TODO
+# zerolike and randlike settings
 python train2_seq.py --logdir experiments/mambafuser_image_missing --Val 1 --batch_size 24 --modality_missing image --load_model_path experiments/FFM-csbimamba_TFM-attenmamba_base/best_model.pth 
 python train2_seq.py --logdir experiments/mambafuser_lidar_missing --Val 1 --batch_size 24 --modality_missing lidar --load_model_path experiments/FFM-csbimamba_TFM-attenmamba_base/best_model.pth 
 python train2_seq.py --logdir experiments/mambafuser_radar_missing --Val 1 --batch_size 24 --modality_missing radar --load_model_path experiments/FFM-csbimamba_TFM-attenmamba_base/best_model.pth 
 python train2_seq.py --logdir experiments/mambafuser_lidar_radar_missing --Val 1 --batch_size 24 --modality_missing lidar_radar --load_model_path experiments/FFM-csbimamba_TFM-attenmamba_base/best_model.pth 
-python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_image_missing --batch_size 24 -s lidar radar -t image --modality_missing image
-python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_lidar_missing --batch_size 24 -s image radar -t lidar --modality_missing lidar
-python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_radar_missing --batch_size 24 -s image lidar -t radar --modality_missing radar
-python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_lidar_radar_missing --batch_size 24 -s image -t lidar radar --modality_missing lidar_radar
+
+python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_image_missing --batch_size 24 -s lidar radar -t image --modality_missing image --modality_missing_type zerolike
+python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_image_missing --batch_size 24 -s lidar radar -t image --modality_missing image --modality_missing_type randlike
+python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_lidar_missing --batch_size 24 -s image radar -t lidar --modality_missing lidar --modality_missing_type zerolike
+python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_lidar_missing --batch_size 24 -s image radar -t lidar --modality_missing lidar --modality_missing_type randlike
+python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_radar_missing --batch_size 24 -s image lidar -t radar --modality_missing radar --modality_missing_type zerolike
+python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_radar_missing --batch_size 24 -s image lidar -t radar --modality_missing radar --modality_missing_type randlike
+python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_lidar_radar_missing --batch_size 24 -s image -t lidar radar --modality_missing lidar_radar --modality_missing_type zerolike
+python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_lidar_radar_missing --batch_size 24 -s image -t lidar radar --modality_missing lidar_radar --modality_missing_type randlike
 ```
 
 ## Table IV
@@ -245,7 +250,7 @@ Ablation study in modality rebuilding
 | ✅           | ✅           | ✅              | ✅              |        |        |        |        |
 
 ```
-# TODO
+# TODO (in randlike setting)
 python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_fusion_image_missing --batch_size 24 -s lidar radar -t image --modality_missing image --alpha_trans 0 --alpha_contrast 0 --alpha_distance 0
 python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_fusion_trans_image_missing --batch_size 24 -s lidar radar -t image --modality_missing image --alpha_contrast 0 --alpha_distance 0
 python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_fusion_trans_constrast_image_missing --batch_size 24 -s lidar radar -t image --modality_missing image --alpha_distance 0
