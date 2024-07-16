@@ -374,6 +374,10 @@ class EncoderWithMamba(nn.Module):
         elif miss == 'radar':
             radar_missing = torch.zeros_like(radar).to(device)
             return [image, lidar, radar_missing]
+        elif miss == 'lidar_radar' or miss == 'radar_lidar':
+            lidar_missing = torch.zeros_like(lidar).to(device)
+            radar_missing = torch.zeros_like(radar).to(device)
+            return [image, lidar_missing, radar_missing]
 
     def forward(self, image_list, lidar_list, radar_list, gps, rebuild_modality_feat_list=None):
         '''

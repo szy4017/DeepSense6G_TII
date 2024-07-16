@@ -63,7 +63,7 @@ if args.logdir == 'log':
 if args.Val:
 	args.logdir = args.logdir + '_val'
 if args.modality_missing is not None:
-	args.logdir = args.logdir + '_' + args.modality_missing
+	args.logdir = args.logdir + '-ms_' + args.modality_missing
 
 writer = SummaryWriter(log_dir=args.logdir)
 class Engine(object):
