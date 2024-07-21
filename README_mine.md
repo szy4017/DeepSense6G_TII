@@ -172,20 +172,23 @@ python train_image_radar_lidar_rebuild.py -s lidar radar -t image --batch_size 8
 ## Table I
 MambaFusion vs other method, DBA score
 
+I: Image; L: LiDAR; R: Radar; G: GPS
+
 | Method    | Modality | Parameter | Overall | Scenario 31 | Scenario 32 | Scenario 33 | Scenario 34 |
 |-----------|----------|-----------|---------|-------------|-------------|-------------|-------------|
 | baseline1 |          |           |         |             |             |             |             |
 | baseline2 |          |           |         |             |             |             |             |
 | ...       |          |           |         |             |             |             |             |
-| ours      |          |           |         |             |             |             |             |
-
+| ours      |I+G       | 78118308  | 0.8736  | 0.9994      | 0.8619      | 0.8587      | 0.8323      |
+| ours      |I+L+G     | 92288548  | 0.8803  | 1.0         | 0.8669      | 0.8640      | 0.8462      |
+| ours      |I+R+G     | 92291684  | 0.8754  | 0.9997      | 0.8623      | 0.8501      | 0.8487      |
+| ours      |L+R+G     | 82177252  | 0.8157  | 1.0         | 0.8330      | 0.7806      | 0.7312      |
+| ours      |I+L+R+G   |103461924  | 0.8918  | 1.0         | 0.8776      | 0.8759      | 0.8918      |
 ```
 python train2_seq.py --logdir experiments/FFM_TFM_base --batch_size 24
 python train2_seq.py --logdir experiments/FFM-csbimamba_TFM-attenmamba_base --batch_size 24
 python train2_seq.py --logdir experiments/FFM-csbimamba_TFM-attenmamba_img_lidar --batch_size 24 --modality_missing radar
 python train2_seq.py --logdir experiments/FFM-csbimamba_TFM-attenmamba_img_radar --batch_size 24 --modality_missing lidar
-
-# TODO
 python train2_seq.py --logdir experiments/FFM-csbimamba_TFM-attenmamba_lidar_radar --batch_size 24 --modality_missing image
 python train2_seq.py --logdir experiments/FFM-csbimamba_TFM-attenmamba_image --batch_size 24 --modality_missing lidar_radar
 ```
@@ -211,12 +214,13 @@ python train2_seq.py --logdir experiments/FFM-csbimamba_ablation --TFM 0 --batch
 
 ## Table III
 Performance in modality missing
+modality_missing_type: zerolike, randlike
 
-| Method     | Image missing | lidar missing | radar missing | lidar & radar missing |
-|------------|---------------|---------------|---------------|-----------------------|
-| baseline   |               |               |               |                       |
-| ours       |               |               |               |                       |
-| ours + MRM |               |               |               |                       |
+| Method     | Image missing  | lidar missing  | radar missing  | lidar & radar missing |
+|------------|----------------|----------------|----------------|-----------------------|
+| baseline   |                |                |                |                       |
+| ours       | 0.2695, 0.2793 | 0.6958, 0.6960 | 0.6961, 0.2386 | 0.6966, 0.2346        |
+| ours + MRM | 0.5941, 0.5968 | 0.8012, 0.7855 | 0.8129, 0.6542 | 0.7523, 0.6863        |
 
 * baseline: Transfuser_TII -> TODO
 * MRM: Modality Rebuilding Module
@@ -243,17 +247,19 @@ Ablation study in modality rebuilding
 
 | loss_fusion | loss_trans | loss_contrast | loss_distance | L,R->I | I,R->L | I,L->R | I->L,R |
 |-------------|------------|---------------|---------------|--------|--------|--------|--------|
-|             |            |               |               |        |        |        |        |
-| ✅           |            |               |               |        |        |        |        |
-| ✅           | ✅           |               |               |        |        |        |        |
-| ✅           | ✅           | ✅              |               |        |        |        |        |
-| ✅           | ✅           | ✅              | ✅              |        |        |        |        |
+| ✅           |            |               |               | 0.5048 |        |        |        |
+| ✅           | ✅           |               |               | 0.5622 |        |        |        |
+| ✅           | ✅           | ✅              |               | 0.5745 |        |        |        |
+| ✅           | ✅           | ✅              | ✅              | 0.5941 |        |        |        |
+
+增加一个使用不同loss组合的,loss下降图
 
 ```
 # TODO (in randlike setting)
 python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_fusion_image_missing --batch_size 24 -s lidar radar -t image --modality_missing image --alpha_trans 0 --alpha_contrast 0 --alpha_distance 0
 python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_fusion_trans_image_missing --batch_size 24 -s lidar radar -t image --modality_missing image --alpha_contrast 0 --alpha_distance 0
 python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_fusion_trans_constrast_image_missing --batch_size 24 -s lidar radar -t image --modality_missing image --alpha_distance 0
+
 python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_fusion_lidar_missing --batch_size 24 -s image radar -t lidar --modality_missing lidar --alpha_trans 0 --alpha_contrast 0 --alpha_distance 0
 python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_fusion_trans_lidar_missing --batch_size 24 -s image radar -t lidar --modality_missing lidar --alpha_contrast 0 --alpha_distance 0
 python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_fusion_trans_constrast_lidar_missing --batch_size 24 -s image radar -t lidar --modality_missing lidar --alpha_distance 0
@@ -267,6 +273,7 @@ python train_mambafuser_modality_rebuild.py --logdir experiments/rebuilding_fusi
 
 ### Commands
 ```
+export PYTHONPATH=$PYTHONPATH:/data/szy4017/code/DeepSense6G_TII
 tensorboard --logdir log --host=10.15.198.46 --port=6008
 tensorboard --logdir experiments --host=10.15.198.46 --port=6008
 python train2_seq.py --epochs 30 --batch_size 24 --logdir 'log/20240619_165326'
